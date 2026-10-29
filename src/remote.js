@@ -167,16 +167,22 @@ export async function createSeedShop(name) {
     position,
   }));
   let { error } = await supabase.rpc("create_store", { shop, categories, products });
-  if (error && /shop exists/i.test(error.message || "")) {
-    const current = await supabase.auth.getUser();
-    if (current.data?.user?.id) return fetchStoreByOwner(current.data.user.id);
-  }
   if (error && /featured_rank/i.test(error.message || "")) {
     const plain = products.map(({ featured_rank: _rank, ...product }) => product);
     ({ error } = await supabase.rpc("create_store", { shop, categories, products: plain }));
   }
+  if (error && alreadyHasShop(error)) {
+    const current = await supabase.auth.getUser();
+    if (current.data?.user?.id) return fetchStoreByOwner(current.data.user.id);
+  }
   if (error) return { error: explain(error), store: null };
   return fetchStoreBySlug(shop.slug);
+}
+
+function alreadyHasShop(error) {
+  const message = error?.message || "";
+  const code = error?.code || "";
+  return code === "23505" || /shop exists|duplicate key|shops_owner_id/i.test(message);
 }
 
 export async function deleteMyAccount(userId) {

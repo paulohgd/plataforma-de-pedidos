@@ -4,17 +4,28 @@ import { useUI } from "../router";
 import { PageHead } from "../ui";
 
 export default function RequireOwner({ children }) {
-  const { account, isOwner, hasOwner, remoteError, retryStore, ready } = useCatalog();
+  const { account, isOwner, hasOwner, remoteError, retryStore, ready, linking } = useCatalog();
   const { openAccess, goHome, notify } = useUI();
   const sent = useRef(false);
 
   useEffect(() => {
-    if (!ready || account || sent.current) return;
+    if (!ready || account || sent.current || linking) return;
     sent.current = true;
     openAccess();
-  }, [ready, account, openAccess]);
+  }, [ready, account, linking, openAccess]);
 
-  if (!ready || !account) return null;
+  if (!account) return null;
+
+  if (linking || !ready || (hasOwner && !isOwner)) {
+    return (
+      <div className="admin-page">
+        <PageHead title="Área da loja" onBack={goHome} />
+        <div className="form">
+          <p className="hint">Carregando a loja…</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!isOwner && !hasOwner) {
     return (
@@ -34,17 +45,6 @@ export default function RequireOwner({ children }) {
           >
             Tentar de novo
           </button>
-        </div>
-      </div>
-    );
-  }
-
-  if (hasOwner && !isOwner) {
-    return (
-      <div className="admin-page">
-        <PageHead title="Área da loja" onBack={goHome} />
-        <div className="form">
-          <p className="hint">Abrindo a sua loja…</p>
         </div>
       </div>
     );

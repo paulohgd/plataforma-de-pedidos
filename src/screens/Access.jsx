@@ -4,7 +4,7 @@ import { useUI } from "../router";
 import { PageHead } from "../ui";
 
 export default function Access() {
-  const { account, hasOwner, remoteError, authNotice, ready, retryStore, register, login, resendConfirmation, logout } = useCatalog();
+  const { account, hasOwner, remoteError, authNotice, ready, linking, retryStore, register, login, resendConfirmation, logout } = useCatalog();
   const { goHome, openAdmin, notify } = useUI();
   const [mode, setMode] = useState("login");
   const [name, setName] = useState("");
@@ -43,7 +43,7 @@ export default function Access() {
   }
 
   if (account) {
-    if (pending || !ready) {
+    if (pending || linking || !ready) {
       return (
         <div className="admin-page">
           <PageHead title="Área da loja" onBack={goHome} />

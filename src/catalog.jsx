@@ -111,9 +111,12 @@ export function CatalogProvider({ children }) {
   const [remoteError, setRemoteError] = useState("");
   const [authNotice, setAuthNotice] = useState("");
   const [ready, setReady] = useState(false);
+  const [linking, setLinking] = useState(false);
   const accountRef = useRef(null);
   const storeRef = useRef(store);
   const ticket = useRef(0);
+  const shopJob = useRef(null);
+  const shopJobUser = useRef("");
 
   const isOwner = Boolean(account && store.ownerId === account.id);
   const hasOwner = Boolean(mine?.shopId);
@@ -125,6 +128,30 @@ export function CatalogProvider({ children }) {
     setStore(next);
   }
 
+  const ensureOwnedStore = useCallback(async (user) => {
+    if (!user) return { store: null, error: "" };
+    if (shopJob.current && shopJobUser.current === user.id) return shopJob.current;
+    shopJobUser.current = user.id;
+    const job = (async () => {
+      const existing = await fetchStoreByOwner(user.id);
+      if (existing.store || existing.error) return existing;
+      const created = await createSeedShop(user.storeName || user.name);
+      if (created.store) return created;
+      const again = await fetchStoreByOwner(user.id);
+      if (again.store) return { store: again.store, error: "" };
+      return { store: null, error: created.error || again.error || "Não foi possível criar a loja." };
+    })();
+    shopJob.current = job;
+    try {
+      return await job;
+    } finally {
+      if (shopJob.current === job) {
+        shopJob.current = null;
+        shopJobUser.current = "";
+      }
+    }
+  }, []);
+
   const refresh = useCallback(async () => {
     const current = ++ticket.current;
     const user = accountRef.current;
@@ -132,34 +159,25 @@ export function CatalogProvider({ children }) {
     let owned = { store: null, error: "" };
 
     if (user) {
-      owned = await fetchStoreByOwner(user.id);
-      if (current !== ticket.current) return { error: "", ownsStore: false };
-      if (!owned.store && !owned.error) {
-        const created = await createSeedShop(user.storeName || user.name);
-        if (current !== ticket.current) return { error: "", ownsStore: false };
-        if (created.store) owned = created;
-        else owned = await fetchStoreByOwner(user.id);
-        if (!owned.store) {
-          const message = created.error || owned.error || "Não foi possível criar a loja.";
-          setRemoteError(message);
-          setMine(null);
-          setReady(true);
-          if (place.scope !== "shop" && place.scope !== "directory") {
-            return { error: message, ownsStore: false };
-          }
-        }
-      }
-      if (owned.error) {
-        setRemoteError(owned.error);
-      } else if (owned.store) {
+      setLinking(true);
+      owned = await ensureOwnedStore(user);
+      if (owned.store) {
         setMine({ shopId: owned.store.shopId, ownerId: owned.store.ownerId, slug: owned.store.shop.slug });
         setRemoteError("");
+      } else if (owned.error) {
+        setRemoteError(owned.error);
+        setMine(null);
       } else {
         setMine(null);
       }
+      setLinking(false);
     } else {
       setMine(null);
+      setLinking(false);
     }
+
+    const ownsStore = Boolean(owned.store && user && owned.store.ownerId === user.id);
+    if (current !== ticket.current) return { error: owned.error || "", ownsStore };
 
     if (place.scope === "admin" || place.scope === "access") {
       if (owned.store) {
@@ -167,7 +185,7 @@ export function CatalogProvider({ children }) {
         setMissing(false);
       }
       setReady(true);
-      return { error: owned.error || "", ownsStore: Boolean(owned.store && user && owned.store.ownerId === user.id) };
+      return { error: owned.error || "", ownsStore };
     }
 
     if (place.scope === "shop") {
@@ -219,12 +237,12 @@ export function CatalogProvider({ children }) {
         }
       }
       setReady(true);
-      return { error: "", ownsStore: Boolean(owned.store && user && owned.store.ownerId === user.id) };
+      return { error: "", ownsStore };
     }
 
     setReady(true);
-    return { error: "", ownsStore: Boolean(owned.store && user && owned.store.ownerId === user.id) };
-  }, []);
+    return { error: owned.error || "", ownsStore };
+  }, [ensureOwnedStore]);
 
   useEffect(() => {
     let cancel = false;
@@ -255,9 +273,10 @@ export function CatalogProvider({ children }) {
     };
     window.addEventListener("pedido-nav", onNav);
     window.addEventListener("popstate", onNav);
-    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data } = supabase.auth.onAuthStateChange((event, session) => {
       const user = toAccount(session?.user);
       accountRef.current = user;
+      if (user && (event === "SIGNED_IN" || event === "INITIAL_SESSION")) setLinking(true);
       setAccount(user);
     });
 
@@ -302,6 +321,7 @@ export function CatalogProvider({ children }) {
 
       const user = toAccount(data.session.user);
       accountRef.current = user;
+      setLinking(true);
       setAccount(user);
       const result = await refresh();
       if (result.error) return { ok: false, error: result.error };
@@ -317,6 +337,7 @@ export function CatalogProvider({ children }) {
       if (error) return { ok: false, error: explainAuth(error) };
       const user = toAccount(data.user);
       accountRef.current = user;
+      setLinking(true);
       setAccount(user);
       const result = await refresh();
       if (result.error) return { ok: false, error: result.error };
@@ -552,6 +573,7 @@ export function CatalogProvider({ children }) {
     remoteError,
     authNotice,
     ready,
+    linking,
     retryStore,
     getProduct(id) {
       return products.find((product) => product.id === id) || null;
