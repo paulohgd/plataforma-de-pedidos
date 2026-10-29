@@ -832,6 +832,10 @@ h1, h2, h3 { line-height: 1.2; }
   font-size: 16px;
 }
 
+.form > .admin-subtitle:first-child {
+  margin-top: 0;
+}
+
 .paid-preview {
   min-height: 0;
   padding: 16px;
@@ -1099,6 +1103,12 @@ h1, h2, h3 { line-height: 1.2; }
 
 .text-btn.danger { color: var(--danger); }
 
+.text-btn:disabled {
+  color: var(--disabled-text);
+  text-decoration: none;
+  cursor: default;
+}
+
 .form.inset { padding: 0; }
 
 .form label.check {
@@ -1112,6 +1122,23 @@ h1, h2, h3 { line-height: 1.2; }
   height: 18px;
   padding: 0;
   accent-color: #1a1a1a;
+}
+
+.featured-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.featured-pick {
+  display: flex;
+  gap: 8px;
+  align-items: end;
+}
+
+.featured-pick select {
+  width: 100%;
 }
 
 .ghost {

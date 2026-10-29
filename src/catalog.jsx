@@ -1,4 +1,5 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, createContext } from "react";
+import { authRedirectTo, clearAuthCallbackUrl, readAuthCallbackError } from "./authCallback";
 import { paidMessage, paidTitle, shop as defaultShop } from "./config";
 import { norm, slugify } from "./format";
 import { hydrateProducts, orderFeatured } from "./menu";
@@ -13,6 +14,7 @@ import {
   fetchStoreByOwner,
   fetchStoreBySlug,
   insertCategory,
+  saveFeaturedProducts,
   saveShopRow,
   saveShopSecrets,
   updateCategoryName,
@@ -74,6 +76,7 @@ function cleanProduct(product) {
     price: Math.round(Number(product.price) * 100) / 100,
     image,
     featured: Boolean(product.featured),
+    featuredRank: Math.max(0, Math.round(Number(product.featuredRank) || 0)),
   };
 }
 
@@ -106,6 +109,7 @@ export function CatalogProvider({ children }) {
   const [mine, setMine] = useState(null);
   const [missing, setMissing] = useState(false);
   const [remoteError, setRemoteError] = useState("");
+  const [authNotice, setAuthNotice] = useState("");
   const [ready, setReady] = useState(false);
   const accountRef = useRef(null);
   const storeRef = useRef(store);
@@ -130,6 +134,21 @@ export function CatalogProvider({ children }) {
     if (user) {
       owned = await fetchStoreByOwner(user.id);
       if (current !== ticket.current) return { error: "", ownsStore: false };
+      if (!owned.store && !owned.error) {
+        const created = await createSeedShop(user.storeName || user.name);
+        if (current !== ticket.current) return { error: "", ownsStore: false };
+        if (created.store) owned = created;
+        else owned = await fetchStoreByOwner(user.id);
+        if (!owned.store) {
+          const message = created.error || owned.error || "Não foi possível criar a loja.";
+          setRemoteError(message);
+          setMine(null);
+          setReady(true);
+          if (place.scope !== "shop" && place.scope !== "directory") {
+            return { error: message, ownsStore: false };
+          }
+        }
+      }
       if (owned.error) {
         setRemoteError(owned.error);
       } else if (owned.store) {
@@ -142,27 +161,13 @@ export function CatalogProvider({ children }) {
       setMine(null);
     }
 
-    if (place.scope === "admin" && user) {
-      if (!owned.store && !owned.error) {
-        const created = await createSeedShop(user.storeName || user.name);
-        if (current !== ticket.current) return { error: "", ownsStore: false };
-        if (created.store) owned = created;
-        else owned = await fetchStoreByOwner(user.id);
-        if (!owned.store) {
-          const message = created.error || owned.error || "Não foi possível criar a loja.";
-          setRemoteError(message);
-          setReady(true);
-          return { error: message, ownsStore: false };
-        }
-        setMine({ shopId: owned.store.shopId, ownerId: owned.store.ownerId, slug: owned.store.shop.slug });
-        setRemoteError("");
-      }
+    if (place.scope === "admin" || place.scope === "access") {
       if (owned.store) {
         commitStore(owned.store);
         setMissing(false);
       }
       setReady(true);
-      return { error: owned.error || "", ownsStore: Boolean(owned.store && owned.store.ownerId === user.id) };
+      return { error: owned.error || "", ownsStore: Boolean(owned.store && user && owned.store.ownerId === user.id) };
     }
 
     if (place.scope === "shop") {
@@ -230,6 +235,17 @@ export function CatalogProvider({ children }) {
       const user = toAccount(data.session?.user);
       accountRef.current = user;
       setAccount(user);
+      if (!data.session) {
+        const callbackError = readAuthCallbackError();
+        if (callbackError) {
+          setAuthNotice(callbackError);
+          if (!window.location.pathname.startsWith("/acesso")) {
+            history.replaceState({ name: "access" }, "", "/acesso");
+            window.dispatchEvent(new Event("pedido-nav"));
+          }
+        }
+      }
+      clearAuthCallbackUrl();
       await refresh();
     }
 
@@ -273,7 +289,7 @@ export function CatalogProvider({ children }) {
         password,
         options: {
           data: { name: cleanName.slice(0, 60), storeName: cleanStore.slice(0, 80) },
-          emailRedirectTo: window.location.origin,
+          emailRedirectTo: authRedirectTo(),
         },
       });
       if (error) return { ok: false, error: explainAuth(error) };
@@ -308,6 +324,17 @@ export function CatalogProvider({ children }) {
     },
     [refresh],
   );
+
+  const resendConfirmation = useCallback(async (email) => {
+    const cleanEmail = String(email || "").trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) return "Informe um e-mail válido.";
+    const { error } = await supabase.auth.resend({
+      type: "signup",
+      email: cleanEmail,
+      options: { emailRedirectTo: authRedirectTo() },
+    });
+    return error ? explainAuth(error) : "";
+  }, []);
 
   const logout = useCallback(async () => {
     accountRef.current = null;
@@ -442,6 +469,15 @@ export function CatalogProvider({ children }) {
       const draft = cleanProduct({ ...input, name, price, image, description: String(input.description || "").trim() });
       if (!draft) return "Não foi possível salvar o produto.";
       const id = draft.id || uniqueId(name, new Set(store.products.map((product) => product.id)));
+      const previous = store.products.find((product) => product.id === id);
+      if (draft.featured) {
+        draft.featuredRank =
+          previous?.featured && Number.isFinite(previous.featuredRank)
+            ? previous.featuredRank
+            : store.products.filter((product) => product.featured && product.id !== id).length;
+      } else {
+        draft.featuredRank = 0;
+      }
       if (image.startsWith("data:image/")) {
         const uploaded = await uploadProductImage(account.id, id, image);
         if (uploaded.error) return uploaded.error;
@@ -475,6 +511,32 @@ export function CatalogProvider({ children }) {
     [deny, store.shopId],
   );
 
+  const setFeaturedOrder = useCallback(
+    async (ids) => {
+      const denied = deny();
+      if (denied) return denied;
+      const allowed = new Set(store.products.map((product) => product.id));
+      const order = ids.filter((id) => allowed.has(id));
+      const ranked = new Map(order.map((id, index) => [id, index]));
+      const nextProducts = store.products.map((product) => ({
+        ...product,
+        featured: ranked.has(product.id),
+        featuredRank: ranked.get(product.id) ?? 0,
+      }));
+      const changed = nextProducts.filter((product, index) => {
+        const previous = store.products[index];
+        return product.featured !== Boolean(previous.featured) || (product.featuredRank ?? 0) !== (previous.featuredRank ?? 0);
+      });
+      if (changed.length) {
+        const error = await saveFeaturedProducts(store.shopId, changed);
+        if (error) return error;
+      }
+      setStore((current) => ({ ...current, products: nextProducts }));
+      return "";
+    },
+    [deny, store.products, store.shopId],
+  );
+
   const value = {
     shop: store.shop,
     shopId: store.shopId,
@@ -488,6 +550,7 @@ export function CatalogProvider({ children }) {
     isOwner,
     hasOwner,
     remoteError,
+    authNotice,
     ready,
     retryStore,
     getProduct(id) {
@@ -498,12 +561,14 @@ export function CatalogProvider({ children }) {
     },
     register,
     login,
+    resendConfirmation,
     logout,
     updateShop,
     addCategory,
     renameCategory,
     removeCategory,
     saveProduct,
+    setFeaturedOrder,
     removeProduct,
     removeAccount,
   };

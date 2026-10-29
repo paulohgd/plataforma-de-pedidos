@@ -65,6 +65,114 @@ function CategoryRow({ category, count, onRename, onRemove }) {
   );
 }
 
+function FeaturedEditor({ products, featured, onSave, onError, notify }) {
+  const [pick, setPick] = useState("");
+  const [busy, setBusy] = useState(false);
+  const available = products
+    .filter((product) => !product.featured)
+    .slice()
+    .sort((a, b) => String(a.name).localeCompare(String(b.name), "pt-BR"));
+
+  async function commit(ids, okText) {
+    setBusy(true);
+    const message = await onSave(ids);
+    setBusy(false);
+    if (message) {
+      onError(message);
+      return;
+    }
+    notify(okText);
+  }
+
+  function ids() {
+    return featured.map((product) => product.id);
+  }
+
+  return (
+    <div className="form">
+      <h3 className="admin-subtitle">Destaques</h3>
+      <p className="hint">Esses produtos aparecem no topo do cardápio. Marque, tire ou use as setas para mudar a ordem.</p>
+      {featured.length === 0 ? <p className="empty-inline">Nenhum destaque ainda.</p> : null}
+      {featured.map((product, index) => (
+        <article key={product.id} className="admin-card product-card">
+          <Thumb src={product.image} className="thumb" />
+          <div className="grow">
+            <strong>{product.name}</strong>
+            <div className="featured-actions">
+              <button
+                type="button"
+                className="text-btn"
+                disabled={busy || index === 0}
+                onClick={() => {
+                  const next = ids();
+                  [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                  commit(next, "Ordem dos destaques atualizada.");
+                }}
+              >
+                Subir
+              </button>
+              <button
+                type="button"
+                className="text-btn"
+                disabled={busy || index === featured.length - 1}
+                onClick={() => {
+                  const next = ids();
+                  [next[index + 1], next[index]] = [next[index], next[index + 1]];
+                  commit(next, "Ordem dos destaques atualizada.");
+                }}
+              >
+                Descer
+              </button>
+              <button
+                type="button"
+                className="text-btn danger"
+                disabled={busy}
+                onClick={() => commit(ids().filter((id) => id !== product.id), "Destaque removido.")}
+              >
+                Tirar
+              </button>
+            </div>
+          </div>
+        </article>
+      ))}
+      {available.length > 0 ? (
+        <div className="featured-pick">
+          <label className="grow">
+            Adicionar destaque
+            <select value={pick} onChange={(event) => setPick(event.target.value)} disabled={busy}>
+              <option value="">Escolha um produto</option>
+              {available.map((product) => (
+                <option key={product.id} value={product.id}>
+                  {product.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            className="ghost"
+            disabled={busy || !pick}
+            onClick={() => {
+              if (!pick) return;
+              const id = pick;
+              setPick("");
+              commit([...ids(), id], "Destaque adicionado.");
+            }}
+          >
+            Adicionar
+          </button>
+        </div>
+      ) : (
+        <p className="hint">
+          {products.length === 0
+            ? "Cadastre produtos na aba Produtos para escolher os destaques."
+            : "Todos os produtos já estão nos destaques."}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function ProductRow({ product, categoryName, onEdit, onRemove }) {
   const [confirming, setConfirming] = useState(false);
 
@@ -102,7 +210,7 @@ function ProductRow({ product, categoryName, onEdit, onRemove }) {
 }
 
 function AdminPanel() {
-  const { shop, shopId, categories, products, account, logout, updateShop, addCategory, renameCategory, removeCategory, removeProduct, removeAccount } = useCatalog();
+  const { shop, shopId, categories, products, featured, account, logout, updateShop, addCategory, renameCategory, removeCategory, removeProduct, removeAccount, setFeaturedOrder } = useCatalog();
   const { route, goHome, openAdmin, openProductForm, notify } = useUI();
   const [tab, setTab] = useState(route.tab || "produtos");
   const [error, setError] = useState("");
@@ -361,6 +469,16 @@ function AdminPanel() {
 
       {tab === "loja" ? (
         <>
+        <FeaturedEditor
+          products={products}
+          featured={featured}
+          onSave={setFeaturedOrder}
+          onError={showError}
+          notify={(text) => {
+            setError("");
+            notify(text);
+          }}
+        />
         <form className="form" onSubmit={submitShop}>
           <label>
             Nome da loja

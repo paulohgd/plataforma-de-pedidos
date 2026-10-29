@@ -27,6 +27,9 @@ export function explainAuth(error) {
   if (/invalid login credentials/i.test(message)) return "E-mail ou senha não conferem.";
   if (/already registered|already been registered/i.test(message)) return "Já existe uma conta com esse e-mail.";
   if (/email not confirmed/i.test(message)) return "Confirme o e-mail antes de entrar.";
+  if (/otp_expired|expired|invalid/i.test(message) && /link|otp|email/i.test(message)) {
+    return "Este link de confirmação já foi usado ou expirou. Peça outro e-mail ou entre se a conta já estiver confirmada.";
+  }
   if (/password/i.test(message)) return "A senha precisa ter pelo menos 6 caracteres.";
   return "Não foi possível acessar agora.";
 }
@@ -58,6 +61,7 @@ function toStore(shop, categories, products) {
       price: Number(product.price),
       image: product.image || "",
       featured: Boolean(product.featured),
+      featuredRank: Number(product.featured_rank) || 0,
     })),
   };
 }
@@ -120,11 +124,24 @@ export async function fetchStoreByOwner(ownerId) {
   return loadShop(shop);
 }
 
+async function nextShopSlug(name) {
+  const base = slugify(name);
+  for (let index = 1; index <= 40; index += 1) {
+    const slug = index === 1 ? base : `${base.slice(0, 44)}-${index}`;
+    const { data, error } = await supabase.from("shops").select("id").eq("slug", slug).maybeSingle();
+    if (error) return { error: explain(error), slug: "" };
+    if (!data) return { error: "", slug };
+  }
+  return { error: "", slug: `${base.slice(0, 32)}-${Date.now().toString(36)}` };
+}
+
 export async function createSeedShop(name) {
   const shopName = String(name || defaultShop.name).trim() || defaultShop.name;
+  const slugResult = await nextShopSlug(shopName);
+  if (slugResult.error) return { error: slugResult.error, store: null };
   const shop = {
     name: shopName,
-    slug: slugify(shopName),
+    slug: slugResult.slug,
     whatsapp: defaultShop.whatsapp,
     address: defaultShop.address,
     hours: defaultShop.hours,
@@ -146,9 +163,18 @@ export async function createSeedShop(name) {
     price: product.price,
     image: product.image,
     featured: Boolean(product.featured),
+    featured_rank: Number(product.featuredRank) || 0,
     position,
   }));
-  const { error } = await supabase.rpc("create_store", { shop, categories, products });
+  let { error } = await supabase.rpc("create_store", { shop, categories, products });
+  if (error && /shop exists/i.test(error.message || "")) {
+    const current = await supabase.auth.getUser();
+    if (current.data?.user?.id) return fetchStoreByOwner(current.data.user.id);
+  }
+  if (error && /featured_rank/i.test(error.message || "")) {
+    const plain = products.map(({ featured_rank: _rank, ...product }) => product);
+    ({ error } = await supabase.rpc("create_store", { shop, categories, products: plain }));
+  }
   if (error) return { error: explain(error), store: null };
   return fetchStoreBySlug(shop.slug);
 }
@@ -248,23 +274,53 @@ export async function deleteCategory(shopId, id) {
   return error ? explain(error) : "";
 }
 
+function missingFeaturedRank(error) {
+  const message = error?.message || "";
+  return /featured_rank/i.test(message) && /column|schema cache/i.test(message);
+}
+
 export async function upsertProduct(shopId, product, position) {
-  const { error } = await supabase.from("products").upsert(
-    {
-      shop_id: shopId,
-      id: product.id,
-      category_id: product.category,
-      kind: product.kind,
-      name: product.name,
-      description: product.description,
-      price: product.price,
-      image: product.image,
-      featured: product.featured,
-      position,
-    },
-    { onConflict: "shop_id,id" },
-  );
+  const row = {
+    shop_id: shopId,
+    id: product.id,
+    category_id: product.category,
+    kind: product.kind,
+    name: product.name,
+    description: product.description,
+    price: product.price,
+    image: product.image,
+    featured: product.featured,
+    featured_rank: Number(product.featuredRank) || 0,
+    position,
+  };
+  let { error } = await supabase.from("products").upsert(row, { onConflict: "shop_id,id" });
+  if (error && missingFeaturedRank(error)) {
+    const { featured_rank: _rank, ...rest } = row;
+    ({ error } = await supabase.from("products").upsert(rest, { onConflict: "shop_id,id" }));
+  }
   return error ? explain(error) : "";
+}
+
+export async function saveFeaturedProducts(shopId, products) {
+  const results = await Promise.all(
+    products.map(async (product) => {
+      const row = {
+        featured: Boolean(product.featured),
+        featured_rank: Number(product.featuredRank) || 0,
+      };
+      let { error } = await supabase.from("products").update(row).eq("shop_id", shopId).eq("id", product.id);
+      if (error && missingFeaturedRank(error)) {
+        ({ error } = await supabase
+          .from("products")
+          .update({ featured: row.featured })
+          .eq("shop_id", shopId)
+          .eq("id", product.id));
+      }
+      return error;
+    }),
+  );
+  const fail = results.find(Boolean);
+  return fail ? explain(fail) : "";
 }
 
 export async function deleteProduct(shopId, id) {

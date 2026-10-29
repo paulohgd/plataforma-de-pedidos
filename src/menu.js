@@ -282,6 +282,8 @@ export const products = [
   },
 ];
 
+const featuredOrder = ["cheese-salad", "coca-cola", "batata-frita", "classico", "duplo", "brownie"];
+
 export const seedProducts = products.map((product) => ({
   id: product.id,
   category: product.category,
@@ -291,15 +293,19 @@ export const seedProducts = products.map((product) => ({
   price: product.price,
   image: product.image,
   featured: Boolean(product.featured),
+  featuredRank: product.featured ? Math.max(0, featuredOrder.indexOf(product.id)) : 0,
 }));
 
-const featuredOrder = ["cheese-salad", "coca-cola", "batata-frita", "classico", "duplo", "brownie"];
-
 export function orderFeatured(list) {
-  const rank = new Map(featuredOrder.map((id, index) => [id, index]));
-  return list
-    .filter((product) => product.featured)
-    .sort((a, b) => (rank.get(a.id) ?? 1000) - (rank.get(b.id) ?? 1000));
+  const featured = list.filter((product) => product.featured);
+  const fallback = new Map(featuredOrder.map((id, index) => [id, index]));
+  const hasRank = featured.some((product) => Number(product.featuredRank) > 0);
+  return featured.slice().sort((a, b) => {
+    const rankA = hasRank ? Number(a.featuredRank) || 0 : (fallback.get(a.id) ?? 1000);
+    const rankB = hasRank ? Number(b.featuredRank) || 0 : (fallback.get(b.id) ?? 1000);
+    if (rankA !== rankB) return rankA - rankB;
+    return String(a.name || "").localeCompare(String(b.name || ""), "pt-BR");
+  });
 }
 
 const sideIds = ["batata-frita", "batata-cheddar", "aneis", "frango-crocante"];

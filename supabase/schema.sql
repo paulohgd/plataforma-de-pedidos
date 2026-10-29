@@ -95,12 +95,15 @@ create table if not exists public.products (
   price numeric(10, 2) not null default 0,
   image text not null default '',
   featured boolean not null default false,
+  featured_rank integer not null default 0,
   position integer not null default 0,
   primary key (shop_id, id),
   foreign key (shop_id, category_id) references public.categories (shop_id, id) on update cascade on delete restrict,
   constraint products_kind check (kind in ('beef', 'chicken', 'sandwich', 'fries', 'simple')),
   constraint products_price check (price >= 0 and price <= 9999)
 );
+
+alter table public.products add column if not exists featured_rank integer not null default 0;
 
 alter table public.shops enable row level security;
 alter table public.categories enable row level security;

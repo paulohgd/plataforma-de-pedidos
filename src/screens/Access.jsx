@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useCatalog } from "../catalog";
 import { useUI } from "../router";
 import { PageHead } from "../ui";
 
 export default function Access() {
-  const { account, hasOwner, remoteError, retryStore, register, login, logout } = useCatalog();
+  const { account, hasOwner, remoteError, authNotice, ready, retryStore, register, login, resendConfirmation, logout } = useCatalog();
   const { goHome, openAdmin, notify } = useUI();
   const [mode, setMode] = useState("login");
   const [name, setName] = useState("");
@@ -13,6 +13,10 @@ export default function Access() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+
+  useEffect(() => {
+    if (authNotice) setError(authNotice);
+  }, [authNotice]);
 
   function switchMode(next) {
     setMode(next);
@@ -39,6 +43,16 @@ export default function Access() {
   }
 
   if (account) {
+    if (pending || !ready) {
+      return (
+        <div className="admin-page">
+          <PageHead title="Área da loja" onBack={goHome} />
+          <div className="form">
+            <p className="hint">Carregando a loja…</p>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="admin-page">
         <PageHead title="Área da loja" onBack={goHome} />
@@ -145,6 +159,26 @@ export default function Access() {
         <button type="submit" className="primary" disabled={pending}>
           {pending ? "Aguarde…" : mode === "register" ? "Criar conta e abrir a loja" : "Entrar"}
         </button>
+        {mode === "login" && /confirm|expirou|expir/i.test(error) ? (
+          <button
+            type="button"
+            className="ghost"
+            disabled={pending}
+            onClick={async () => {
+              setPending(true);
+              const message = await resendConfirmation(email);
+              setPending(false);
+              if (message) {
+                setError(message);
+                return;
+              }
+              setError("");
+              notify("Enviamos outro e-mail de confirmação.");
+            }}
+          >
+            Reenviar e-mail de confirmação
+          </button>
+        ) : null}
       </form>
     </div>
   );

@@ -9,6 +9,17 @@ function shopPath(slug, suffix = "") {
   return `/loja/${encodeURIComponent(slug)}${suffix}`;
 }
 
+function setMeta(attr, name, content) {
+  const selector = `meta[${attr}="${name}"]`;
+  let node = document.head.querySelector(selector);
+  if (!node) {
+    node = document.createElement("meta");
+    node.setAttribute(attr, name);
+    document.head.appendChild(node);
+  }
+  node.setAttribute("content", content);
+}
+
 export function UIProvider({ children }) {
   const { shop, missing } = useCatalog();
   const [route, setRoute] = useState(() => readRoute());
@@ -55,7 +66,7 @@ export function UIProvider({ children }) {
 
   useEffect(() => {
     const area = route.name === "access" || route.name === "admin" || route.name === "product-form";
-    document.title =
+    const title =
       route.name === "stores"
         ? "Lojas"
         : route.name === "paid"
@@ -65,7 +76,15 @@ export function UIProvider({ children }) {
             : missing
               ? "Loja não encontrada"
               : shop.name || "Cardápio";
-  }, [route.name, shop.name, missing]);
+    document.title = title;
+    const description = missing
+      ? "Loja não encontrada."
+      : shop.hours || shop.address || "Peça pelo cardápio.";
+    setMeta("name", "description", description);
+    setMeta("property", "og:title", title);
+    setMeta("property", "og:description", description);
+    setMeta("property", "og:url", window.location.href);
+  }, [route.name, shop.name, shop.hours, shop.address, missing]);
 
   useEffect(() => () => clearTimeout(toastTimer.current), []);
 

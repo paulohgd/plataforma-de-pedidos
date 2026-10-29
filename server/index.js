@@ -7,6 +7,7 @@ import { paidMessage, paidTitle } from "../src/config.js";
 import { buildOrderText, paymentKindFromStripe, withPaidPayment } from "../src/order.js";
 import { cents, quoteCart } from "./quote.js";
 import { sendShopDiscord } from "./discord.js";
+import { isShopPage, sendShopPage } from "./shopPage.js";
 
 const port = Number(process.env.PORT) || 8787;
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
@@ -349,6 +350,10 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.method === "POST" && url.pathname === "/api/stripe-webhook") {
       await handleWebhook(request, response);
+      return;
+    }
+    if (isShopPage(request.method, url.pathname)) {
+      await sendShopPage(request, response, url, supabase);
       return;
     }
     json(response, 404, { error: "Rota não encontrada." });
