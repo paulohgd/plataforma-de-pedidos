@@ -352,8 +352,8 @@ export function CatalogProvider({ children }) {
       const digits = String(shop.whatsapp || "").replace(/\D/g, "");
       if (digits && digits.length < 12) return "O WhatsApp precisa ter DDI e DDD. Exemplo: 5511987654321.";
       const publishable = String(shop.stripePublishableKey || "").trim();
-      if (publishable && !/^pk_(test|live)_/.test(publishable)) {
-        return "A chave publicável da Stripe deve começar com pk_test_ ou pk_live_.";
+      if (publishable && !/^pk_/.test(publishable)) {
+        return "A chave publicável da Stripe deve começar com pk_.";
       }
       const nextShop = cleanShop({ ...store.shop, ...shop, whatsapp: digits, stripePublishableKey: publishable });
       nextShop.slug = slugify(nextShop.name);

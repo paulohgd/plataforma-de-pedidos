@@ -408,7 +408,7 @@ function AdminPanel() {
             <input
               autoComplete="off"
               spellCheck="false"
-              placeholder="pk_test_..."
+              placeholder="pk_..."
               value={shopForm.stripePublishableKey}
               onChange={(event) => setShopForm({ ...shopForm, stripePublishableKey: event.target.value })}
             />
@@ -419,7 +419,7 @@ function AdminPanel() {
               type="password"
               autoComplete="new-password"
               spellCheck="false"
-              placeholder={secretsSaved.stripe ? "Salva. Cole outra só se for trocar." : "sk_test_..."}
+              placeholder={secretsSaved.stripe ? "Salva. Cole outra só se for trocar." : "sk_ ou pk_..."}
               value={shopForm.stripeSecretKey}
               onChange={(event) => setShopForm({ ...shopForm, stripeSecretKey: event.target.value })}
             />
