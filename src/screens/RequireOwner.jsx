@@ -4,7 +4,7 @@ import { useUI } from "../router";
 import { PageHead } from "../ui";
 
 export default function RequireOwner({ children }) {
-  const { account, isOwner, hasOwner, remoteError, retryStore, logout, ready } = useCatalog();
+  const { account, isOwner, hasOwner, remoteError, retryStore, ready } = useCatalog();
   const { openAccess, goHome, notify } = useUI();
   const sent = useRef(false);
 
@@ -44,19 +44,7 @@ export default function RequireOwner({ children }) {
       <div className="admin-page">
         <PageHead title="Área da loja" onBack={goHome} />
         <div className="form">
-          <p className="hint">
-            Esta conta não é a dona da loja. A loja fica com a conta que a criou e é apagada junto com essa conta.
-          </p>
-          <button
-            type="button"
-            className="primary"
-            onClick={() => {
-              logout();
-              openAccess();
-            }}
-          >
-            Entrar com outra conta
-          </button>
+          <p className="hint">Abrindo a sua loja…</p>
         </div>
       </div>
     );

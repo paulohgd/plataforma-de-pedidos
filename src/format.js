@@ -3,10 +3,18 @@ export function money(value) {
 }
 
 export function norm(value) {
-  return value
+  return String(value || "")
     .toLowerCase()
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "");
+}
+
+export function slugify(value) {
+  const slug = norm(value)
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return slug || "loja";
 }
 
 export function groupHint(group) {

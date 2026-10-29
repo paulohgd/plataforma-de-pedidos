@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useCatalog } from "../catalog";
-import { money } from "../format";
+import { money, slugify } from "../format";
 import { useUI } from "../router";
 import { PageHead, Thumb } from "../ui";
 import RequireOwner from "./RequireOwner";
@@ -287,6 +287,7 @@ function AdminPanel() {
             Nome da loja
             <input value={shopForm.name} maxLength={60} onChange={(event) => setShopForm({ ...shopForm, name: event.target.value })} />
           </label>
+          <p className="hint">Cardápio público: /loja/{slugify(shopForm.name)}</p>
           <label>
             WhatsApp
             <input

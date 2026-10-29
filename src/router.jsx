@@ -1,28 +1,17 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { useCatalog } from "./catalog";
+import { readRoute } from "./place";
 
 const UIContext = createContext(null);
 
-function readRoute() {
-  const path = window.location.pathname;
-  const editor = path.match(/^\/painel\/produto\/([^/]+)/);
-  if (editor) return { name: "product-form", id: decodeURIComponent(editor[1]) };
-  if (path.startsWith("/painel/produto")) return { name: "product-form", id: null };
-  if (path.startsWith("/painel/categorias")) return { name: "admin", tab: "categorias" };
-  if (path.startsWith("/painel/loja")) return { name: "admin", tab: "loja" };
-  if (path.startsWith("/painel")) return { name: "admin", tab: "produtos" };
-  if (path.startsWith("/acesso")) return { name: "access" };
-  const product = path.match(/^\/produto\/([^/]+)/);
-  if (product) return { name: "product", id: decodeURIComponent(product[1]), lineId: null };
-  if (path.startsWith("/sacola")) return { name: "bag" };
-  if (path.startsWith("/checkout")) return { name: "checkout" };
-  if (path.startsWith("/busca")) return { name: "search" };
-  return { name: "home" };
+function shopPath(slug, suffix = "") {
+  if (!slug) return "/";
+  return `/loja/${encodeURIComponent(slug)}${suffix}`;
 }
 
 export function UIProvider({ children }) {
-  const { shop } = useCatalog();
-  const [route, setRoute] = useState(() => (history.state?.name ? history.state : readRoute()));
+  const { shop, missing } = useCatalog();
+  const [route, setRoute] = useState(() => readRoute());
   const [toast, setToast] = useState("");
   const [theme, setTheme] = useState(() => localStorage.getItem("pedido-tema") || "light");
   const canBack = useRef(false);
@@ -32,7 +21,9 @@ export function UIProvider({ children }) {
   useEffect(() => {
     if (!history.state?.name) history.replaceState(readRoute(), "");
     const onPop = (event) => {
-      const next = event.state?.name ? event.state : readRoute();
+      const fromUrl = readRoute();
+      const fromState = event.state?.name === fromUrl.name ? event.state : null;
+      const next = fromState ? { ...fromUrl, ...fromState, slug: fromUrl.slug } : fromUrl;
       setRoute(next);
       if (next.name === "home") {
         requestAnimationFrame(() => window.scrollTo(0, homeScroll.current));
@@ -40,8 +31,21 @@ export function UIProvider({ children }) {
         window.scrollTo(0, 0);
       }
     };
+    const onNav = () => {
+      setRoute((current) => {
+        const next = readRoute();
+        if (current?.lineId && current.name === next.name && current.slug === next.slug && current.id === next.id) {
+          return { ...next, lineId: current.lineId };
+        }
+        return next;
+      });
+    };
     window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
+    window.addEventListener("pedido-nav", onNav);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      window.removeEventListener("pedido-nav", onNav);
+    };
   }, []);
 
   useEffect(() => {
@@ -50,8 +54,9 @@ export function UIProvider({ children }) {
   }, [theme]);
 
   useEffect(() => {
-    document.title = shop.name || "Cardápio";
-  }, [shop.name]);
+    const area = route.name === "access" || route.name === "admin" || route.name === "product-form";
+    document.title = route.name === "stores" ? "Lojas" : area ? "Área da loja" : missing ? "Loja não encontrada" : shop.name || "Cardápio";
+  }, [route.name, shop.name, missing]);
 
   useEffect(() => () => clearTimeout(toastTimer.current), []);
 
@@ -67,6 +72,11 @@ export function UIProvider({ children }) {
     else history.pushState(next, "", url);
     setRoute(next);
     window.scrollTo(0, 0);
+    window.dispatchEvent(new Event("pedido-nav"));
+  }
+
+  function currentSlug() {
+    return route.slug || shop.slug || "";
   }
 
   function back() {
@@ -75,7 +85,8 @@ export function UIProvider({ children }) {
       history.back();
       return;
     }
-    go({ name: "home" }, "/");
+    const slug = currentSlug();
+    go(slug ? { name: "home", slug } : { name: "stores", slug: null }, shopPath(slug));
   }
 
   async function share(url, title) {
@@ -105,24 +116,35 @@ export function UIProvider({ children }) {
       setTheme((current) => (current === "dark" ? "light" : "dark"));
     },
     goHome() {
-      if (route.name === "home") {
+      const slug = currentSlug();
+      if (route.name === "home" && route.slug === slug) {
         window.scrollTo({ top: 0, behavior: "smooth" });
         return;
       }
-      go({ name: "home" }, "/");
+      go(slug ? { name: "home", slug } : { name: "stores", slug: null }, shopPath(slug));
+    },
+    openShop(slug) {
+      go({ name: "home", slug }, shopPath(slug));
+    },
+    openDirectory() {
+      go({ name: "stores", slug: null }, "/");
     },
     openProduct(id, lineId = null) {
+      const slug = currentSlug();
       if (route.name === "home") homeScroll.current = window.scrollY;
-      go({ name: "product", id, lineId }, `/produto/${id}`);
+      go({ name: "product", id, lineId, slug }, shopPath(slug, `/produto/${encodeURIComponent(id)}`));
     },
     openBag() {
-      go({ name: "bag" }, "/sacola");
+      const slug = currentSlug();
+      go({ name: "bag", slug }, shopPath(slug, "/sacola"));
     },
     openCheckout() {
-      go({ name: "checkout" }, "/checkout");
+      const slug = currentSlug();
+      go({ name: "checkout", slug }, shopPath(slug, "/checkout"));
     },
     openSearch() {
-      go({ name: "search" }, "/busca");
+      const slug = currentSlug();
+      go({ name: "search", slug }, shopPath(slug, "/busca"));
     },
     openAccess() {
       go({ name: "access" }, "/acesso");

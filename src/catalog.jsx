@@ -1,14 +1,17 @@
-import { useCallback, useContext, useEffect, useMemo, useState, createContext } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, createContext } from "react";
 import { shop as defaultShop } from "./config";
-import { norm } from "./format";
-import { hydrateProducts, orderFeatured, seedCategories, seedProducts } from "./menu";
+import { norm, slugify } from "./format";
+import { hydrateProducts, orderFeatured } from "./menu";
+import { readPlace, readRoute, singleShopRedirect } from "./place";
 import {
   createSeedShop,
   deleteMyAccount,
   deleteCategory,
   deleteProduct,
   explainAuth,
-  fetchStore,
+  fetchShops,
+  fetchStoreByOwner,
+  fetchStoreBySlug,
   insertCategory,
   saveShopRow,
   updateCategoryName,
@@ -20,13 +23,22 @@ import { supabase } from "./supabase";
 const KINDS = new Set(["beef", "chicken", "sandwich", "fries", "simple"]);
 const CatalogContext = createContext(null);
 
-function seedStore() {
+function blankStore() {
   return {
     shopId: null,
     ownerId: null,
-    shop: { ...defaultShop },
-    categories: seedCategories.map((category) => ({ ...category })),
-    products: seedProducts.map((product) => ({ ...product })),
+    shop: {
+      name: "",
+      slug: "",
+      whatsapp: "",
+      address: "",
+      hours: "",
+      open: true,
+      openLabel: defaultShop.openLabel,
+      closedLabel: defaultShop.closedLabel,
+    },
+    categories: [],
+    products: [],
   };
 }
 
@@ -74,51 +86,132 @@ function toAccount(user) {
   return {
     id: user.id,
     name: user.user_metadata?.name || user.email?.split("@")[0] || "Conta",
+    storeName: user.user_metadata?.storeName || "",
     email: user.email || "",
   };
 }
 
 export function CatalogProvider({ children }) {
-  const [store, setStore] = useState(seedStore);
+  const [store, setStore] = useState(blankStore);
+  const [stores, setStores] = useState([]);
+  const [listed, setListed] = useState(false);
   const [account, setAccount] = useState(null);
+  const [mine, setMine] = useState(null);
+  const [missing, setMissing] = useState(false);
   const [remoteError, setRemoteError] = useState("");
   const [ready, setReady] = useState(false);
+  const accountRef = useRef(null);
+  const storeRef = useRef(store);
+  const ticket = useRef(0);
 
   const isOwner = Boolean(account && store.ownerId === account.id);
-  const hasOwner = Boolean(store.ownerId);
+  const hasOwner = Boolean(mine?.shopId);
   const products = useMemo(() => hydrateProducts(store.products), [store.products]);
   const featured = useMemo(() => orderFeatured(products), [products]);
 
-  const applyRemote = useCallback(async (userId) => {
-    const loaded = await fetchStore();
-    if (loaded.error) {
-      setRemoteError(loaded.error);
-      return { error: loaded.error, ownsStore: false };
-    }
-    if (!loaded.store) {
-      if (!userId) {
+  function commitStore(next) {
+    storeRef.current = next;
+    setStore(next);
+  }
+
+  const refresh = useCallback(async () => {
+    const current = ++ticket.current;
+    const user = accountRef.current;
+    const place = readPlace();
+    let owned = { store: null, error: "" };
+
+    if (user) {
+      owned = await fetchStoreByOwner(user.id);
+      if (current !== ticket.current) return { error: "", ownsStore: false };
+      if (owned.error) {
+        setRemoteError(owned.error);
+      } else if (owned.store) {
+        setMine({ shopId: owned.store.shopId, ownerId: owned.store.ownerId, slug: owned.store.shop.slug });
         setRemoteError("");
+      } else {
+        setMine(null);
+      }
+    } else {
+      setMine(null);
+    }
+
+    if (place.scope === "admin" && user) {
+      if (!owned.store && !owned.error) {
+        const created = await createSeedShop(user.storeName || user.name);
+        if (current !== ticket.current) return { error: "", ownsStore: false };
+        if (created.store) owned = created;
+        else owned = await fetchStoreByOwner(user.id);
+        if (!owned.store) {
+          const message = created.error || owned.error || "Não foi possível criar a loja.";
+          setRemoteError(message);
+          setReady(true);
+          return { error: message, ownsStore: false };
+        }
+        setMine({ shopId: owned.store.shopId, ownerId: owned.store.ownerId, slug: owned.store.shop.slug });
+        setRemoteError("");
+      }
+      if (owned.store) {
+        commitStore(owned.store);
+        setMissing(false);
+      }
+      setReady(true);
+      return { error: owned.error || "", ownsStore: Boolean(owned.store && owned.store.ownerId === user.id) };
+    }
+
+    if (place.scope === "shop") {
+      if (storeRef.current.shop.slug === place.slug && storeRef.current.shopId) {
+        setMissing(false);
+        setReady(true);
+        return { error: "", ownsStore: Boolean(user && storeRef.current.ownerId === user.id) };
+      }
+      const loaded = await fetchStoreBySlug(place.slug);
+      if (current !== ticket.current) return { error: "", ownsStore: false };
+      if (loaded.error) {
+        setRemoteError(loaded.error);
+        setReady(true);
+        return { error: loaded.error, ownsStore: false };
+      }
+      if (!loaded.store) {
+        commitStore(blankStore());
+        setMissing(true);
+        setRemoteError("");
+        setReady(true);
         return { error: "", ownsStore: false };
       }
-      const created = await createSeedShop();
-      if (created.store) {
-        setRemoteError("");
-        setStore(created.store);
-        return { error: "", ownsStore: created.store.ownerId === userId };
-      }
-      const again = await fetchStore();
-      if (again.store) {
-        setRemoteError("");
-        setStore(again.store);
-        return { error: "", ownsStore: again.store.ownerId === userId };
-      }
-      const message = created.error || again.error || "Não foi possível criar a loja.";
-      setRemoteError(message);
-      return { error: message, ownsStore: false };
+      commitStore(loaded.store);
+      setMissing(false);
+      setRemoteError("");
+      setReady(true);
+      return { error: "", ownsStore: Boolean(user && loaded.store.ownerId === user.id) };
     }
-    setRemoteError("");
-    setStore(loaded.store);
-    return { error: "", ownsStore: Boolean(userId && loaded.store.ownerId === userId) };
+
+    if (place.scope === "directory") {
+      setListed(false);
+      const list = await fetchShops();
+      if (current !== ticket.current) return { error: "", ownsStore: false };
+      if (list.error) {
+        setRemoteError(list.error);
+        setListed(true);
+        setReady(true);
+        return { error: list.error, ownsStore: false };
+      }
+      setStores(list.shops);
+      setListed(true);
+      setRemoteError("");
+      setMissing(false);
+      if (list.shops.length === 1) {
+        const next = singleShopRedirect(window.location.pathname, list.shops[0].slug);
+        if (next) {
+          history.replaceState(readRoute(next), "", next);
+          window.dispatchEvent(new Event("pedido-nav"));
+        }
+      }
+      setReady(true);
+      return { error: "", ownsStore: Boolean(owned.store && user && owned.store.ownerId === user.id) };
+    }
+
+    setReady(true);
+    return { error: "", ownsStore: Boolean(owned.store && user && owned.store.ownerId === user.id) };
   }, []);
 
   useEffect(() => {
@@ -128,42 +221,51 @@ export function CatalogProvider({ children }) {
       const { data } = await supabase.auth.getSession();
       if (cancel) return;
       const user = toAccount(data.session?.user);
+      accountRef.current = user;
       setAccount(user);
-      await applyRemote(user?.id || null);
-      if (!cancel) setReady(true);
+      await refresh();
     }
 
     boot();
+    const onNav = () => {
+      refresh();
+    };
+    window.addEventListener("pedido-nav", onNav);
+    window.addEventListener("popstate", onNav);
     const { data } = supabase.auth.onAuthStateChange((_event, session) => {
-      setAccount(toAccount(session?.user));
+      const user = toAccount(session?.user);
+      accountRef.current = user;
+      setAccount(user);
     });
 
     return () => {
       cancel = true;
+      window.removeEventListener("pedido-nav", onNav);
+      window.removeEventListener("popstate", onNav);
       data.subscription.unsubscribe();
     };
-  }, [applyRemote]);
+  }, [refresh]);
 
   useEffect(() => {
-    if (!ready || !account) return;
-    if (store.ownerId === account.id || store.shopId) return;
-    applyRemote(account.id);
-  }, [ready, account, store.ownerId, store.shopId, applyRemote]);
+    if (!ready) return;
+    refresh();
+  }, [account?.id, ready, refresh]);
 
   const register = useCallback(
-    async ({ name, email, password }) => {
+    async ({ name, storeName, email, password }) => {
       const cleanName = name.trim();
+      const cleanStore = storeName.trim();
       const cleanEmail = email.trim().toLowerCase();
       if (cleanName.length < 2) return { ok: false, error: "Informe seu nome." };
+      if (cleanStore.length < 2) return { ok: false, error: "Informe o nome da loja." };
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) return { ok: false, error: "Informe um e-mail válido." };
       if (password.length < 6) return { ok: false, error: "A senha precisa ter pelo menos 6 caracteres." };
-      if (store.ownerId) return { ok: false, error: "Esta loja já tem uma conta. Entre com o e-mail dessa conta." };
 
       const { data, error } = await supabase.auth.signUp({
         email: cleanEmail,
         password,
         options: {
-          data: { name: cleanName.slice(0, 60) },
+          data: { name: cleanName.slice(0, 60), storeName: cleanStore.slice(0, 80) },
           emailRedirectTo: window.location.origin,
         },
       });
@@ -176,12 +278,13 @@ export function CatalogProvider({ children }) {
       }
 
       const user = toAccount(data.session.user);
+      accountRef.current = user;
       setAccount(user);
-      const result = await applyRemote(user.id);
+      const result = await refresh();
       if (result.error) return { ok: false, error: result.error };
       return { ok: true, ownsStore: result.ownsStore };
     },
-    [applyRemote, store.ownerId],
+    [refresh],
   );
 
   const login = useCallback(
@@ -190,39 +293,40 @@ export function CatalogProvider({ children }) {
       const { data, error } = await supabase.auth.signInWithPassword({ email: cleanEmail, password });
       if (error) return { ok: false, error: explainAuth(error) };
       const user = toAccount(data.user);
+      accountRef.current = user;
       setAccount(user);
-      const result = await applyRemote(user.id);
+      const result = await refresh();
       if (result.error) return { ok: false, error: result.error };
       return { ok: true, ownsStore: result.ownsStore };
     },
-    [applyRemote],
+    [refresh],
   );
 
   const logout = useCallback(async () => {
+    accountRef.current = null;
     setAccount(null);
+    setMine(null);
     await supabase.auth.signOut();
-  }, []);
+    await refresh();
+  }, [refresh]);
 
   const removeAccount = useCallback(async () => {
     if (!account) return "Entre na conta para apagá-la.";
-    const owned = store.ownerId === account.id;
     const error = await deleteMyAccount(account.id);
     if (error) return error;
+    accountRef.current = null;
     setAccount(null);
+    setMine(null);
+    commitStore(blankStore());
     await supabase.auth.signOut().catch(() => {});
-    if (owned) {
-      setStore(seedStore());
-      return "";
-    }
-    const loaded = await fetchStore();
-    if (loaded.store) setStore(loaded.store);
+    await refresh();
     return "";
-  }, [account, store.ownerId]);
+  }, [account, refresh]);
 
   const retryStore = useCallback(async () => {
-    if (!account) return { error: "Entre na conta para criar a loja.", ownsStore: false };
-    return applyRemote(account.id);
-  }, [account, applyRemote]);
+    if (!accountRef.current) return { error: "Entre na conta para criar a loja.", ownsStore: false };
+    return refresh();
+  }, [refresh]);
 
   const deny = useCallback(() => {
     if (!account) return "Entre com a conta dona desta loja para alterar o cardápio.";
@@ -241,9 +345,13 @@ export function CatalogProvider({ children }) {
       const digits = String(shop.whatsapp || "").replace(/\D/g, "");
       if (digits && digits.length < 12) return "O WhatsApp precisa ter DDI e DDD. Exemplo: 5511987654321.";
       const nextShop = cleanShop({ ...store.shop, ...shop, whatsapp: digits });
+      nextShop.slug = slugify(nextShop.name);
       const error = await saveShopRow(store.shopId, nextShop);
       if (error) return error;
-      setStore((current) => ({ ...current, shop: nextShop }));
+      const nextStore = { ...storeRef.current, shop: nextShop };
+      storeRef.current = nextStore;
+      setMine((current) => (current ? { ...current, slug: nextShop.slug } : current));
+      setStore(nextStore);
       return "";
     },
     [deny, store.shop, store.shopId],
@@ -356,6 +464,9 @@ export function CatalogProvider({ children }) {
     categories: store.categories,
     products,
     featured,
+    stores,
+    listed,
+    missing,
     account,
     isOwner,
     hasOwner,

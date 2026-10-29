@@ -1,4 +1,5 @@
--- Uma loja, uma conta. Apagar a conta apaga a loja, o cardápio e as fotos.
+-- Cada conta tem uma loja. O cardápio público fica em /loja/nome-da-loja.
+-- Apagar a conta apaga a loja, o cardápio e as fotos.
 
 create table if not exists public.shops (
   id uuid primary key default gen_random_uuid(),
@@ -10,10 +11,10 @@ create table if not exists public.shops (
   is_open boolean not null default true,
   open_label text not null default 'Aberto agora',
   closed_label text not null default 'Loja fechada',
+  slug text,
   created_at timestamptz not null default now()
 );
 
-create unique index if not exists shops_one_row on public.shops ((true));
 create unique index if not exists shops_owner_id_key on public.shops (owner_id);
 
 delete from public.shops where owner_id is null;
@@ -22,6 +23,20 @@ alter table public.shops
   add constraint shops_owner_id_fkey
   foreign key (owner_id) references auth.users (id) on delete cascade;
 alter table public.shops alter column owner_id set not null;
+
+alter table public.shops add column if not exists slug text;
+
+update public.shops
+set slug = trim(both '-' from regexp_replace(lower(name), '[^a-z0-9]+', '-', 'g'))
+where slug is null or btrim(slug) = '';
+
+update public.shops
+set slug = 'loja'
+where slug is null or btrim(slug) = '';
+
+alter table public.shops alter column slug set not null;
+create unique index if not exists shops_slug_key on public.shops (slug);
+drop index if exists shops_one_row;
 
 create table if not exists public.categories (
   shop_id uuid not null references public.shops (id) on delete cascade,
@@ -73,7 +88,7 @@ create policy shops_insert on public.shops
   for insert to authenticated
   with check (
     owner_id = auth.uid()
-    and (select count(*) from public.shops) = 0
+    and not exists (select 1 from public.shops as existing where existing.owner_id = auth.uid())
   );
 
 create policy shops_update on public.shops
@@ -127,18 +142,28 @@ set search_path = public
 as $$
 declare
   new_id uuid;
+  raw_slug text;
 begin
   if auth.uid() is null then
     raise exception 'not authenticated';
   end if;
 
-  if exists (select 1 from public.shops) then
+  if exists (select 1 from public.shops where owner_id = auth.uid()) then
     raise exception 'shop exists';
   end if;
 
-  insert into public.shops (owner_id, name, whatsapp, address, hours, is_open, open_label, closed_label)
+  raw_slug := lower(coalesce(shop->>'slug', ''));
+  if raw_slug !~ '^[a-z0-9]+(-[a-z0-9]+)*$' or char_length(raw_slug) > 48 then
+    raise exception 'invalid slug';
+  end if;
+  if exists (select 1 from public.shops where slug = raw_slug) then
+    raise exception 'slug taken';
+  end if;
+
+  insert into public.shops (owner_id, slug, name, whatsapp, address, hours, is_open, open_label, closed_label)
   values (
     auth.uid(),
+    raw_slug,
     left(coalesce(nullif(shop->>'name', ''), 'Loja'), 80),
     left(coalesce(shop->>'whatsapp', ''), 15),
     left(coalesce(shop->>'address', ''), 120),

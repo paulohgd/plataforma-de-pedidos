@@ -4,10 +4,11 @@ import { useUI } from "../router";
 import { PageHead } from "../ui";
 
 export default function Access() {
-  const { account, isOwner, hasOwner, remoteError, retryStore, register, login, logout } = useCatalog();
+  const { account, hasOwner, remoteError, retryStore, register, login, logout } = useCatalog();
   const { goHome, openAdmin, notify } = useUI();
   const [mode, setMode] = useState("login");
   const [name, setName] = useState("");
+  const [storeName, setStoreName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -23,7 +24,7 @@ export default function Access() {
     setPending(true);
     setError("");
     try {
-      const result = mode === "register" ? await register({ name, email, password }) : await login({ email, password });
+      const result = mode === "register" ? await register({ name, storeName, email, password }) : await login({ email, password });
       if (!result.ok) {
         setError(result.error);
         return;
@@ -45,12 +46,10 @@ export default function Access() {
           <p className="hint">
             Você está na conta {account.name} ({account.email}).
           </p>
-          {isOwner ? (
+          {hasOwner ? (
             <button type="button" className="primary" onClick={() => openAdmin()}>
               Configurar a loja
             </button>
-          ) : hasOwner ? (
-            <p className="hint">Esta conta não é a dona da loja. A loja não passa para outra conta.</p>
           ) : (
             <>
               <p className="form-error" role="alert">
@@ -103,16 +102,20 @@ export default function Access() {
       <form className="form" onSubmit={submit} noValidate>
         <p className="hint">
           {mode === "register"
-            ? hasOwner
-              ? "Esta loja já tem uma conta. Entre com ela para alterar o cardápio."
-              : "A conta fica com a loja. Se a conta for apagada, a loja e o cardápio também são."
+            ? "Cada conta cria a própria loja. O cardápio fica em /loja/nome-da-loja. Se a conta for apagada, a loja também é."
             : "Entre para alterar produtos, fotos e categorias da sua loja."}
         </p>
         {mode === "register" ? (
-          <label>
-            Nome
-            <input value={name} autoComplete="name" maxLength={60} onChange={(event) => setName(event.target.value)} />
-          </label>
+          <>
+            <label>
+              Nome
+              <input value={name} autoComplete="name" maxLength={60} onChange={(event) => setName(event.target.value)} />
+            </label>
+            <label>
+              Nome da loja
+              <input value={storeName} maxLength={80} placeholder="Ex.: Mustacho Sandwich" onChange={(event) => setStoreName(event.target.value)} />
+            </label>
+          </>
         ) : null}
         <label>
           E-mail

@@ -6,8 +6,8 @@ import { useUI } from "../router";
 import { BottomNav, IconMenu, IconMoon, IconSearch, IconShare, IconSun, ItemLink, Thumb } from "../ui";
 
 export default function Home() {
-  const { shop, categories, featured, productsIn, account } = useCatalog();
-  const { openProduct, openSearch, openBag, openAccess, openAdmin, share, toggleTheme, theme } = useUI();
+  const { shop, categories, featured, productsIn, account, ready, missing, remoteError, retryStore } = useCatalog();
+  const { route, openProduct, openSearch, openBag, openAccess, openAdmin, openDirectory, share, toggleTheme, theme } = useUI();
   const { count, total } = useCart();
   const [active, setActive] = useState(categories[0]?.id || "");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -46,6 +46,38 @@ export default function Home() {
     document.getElementById(`cat-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  if (remoteError && shop.slug !== route.slug) {
+    return (
+      <div className="empty">
+        <h2>Não foi possível abrir a loja</h2>
+        <p>{remoteError}</p>
+        <button type="button" className="primary" onClick={retryStore}>
+          Tentar de novo
+        </button>
+      </div>
+    );
+  }
+
+  if (!ready || (route.slug && shop.slug !== route.slug && !missing)) {
+    return (
+      <div className="empty">
+        <h2>Carregando o cardápio</h2>
+      </div>
+    );
+  }
+
+  if (missing) {
+    return (
+      <div className="empty">
+        <h2>Loja não encontrada</h2>
+        <p>Confira o nome no endereço. Cada loja tem o próprio cardápio.</p>
+        <button type="button" className="primary" onClick={openDirectory}>
+          Ver lojas
+        </button>
+      </div>
+    );
+  }
+
   return (
     <>
       <header className="store-top">
@@ -62,7 +94,7 @@ export default function Home() {
               type="button"
               className="icon-btn"
               aria-label="Compartilhar"
-              onClick={() => share(window.location.origin + "/", shop.name)}
+              onClick={() => share(`${window.location.origin}/loja/${shop.slug}`, shop.name)}
             >
               <IconShare />
             </button>
@@ -100,7 +132,7 @@ export default function Home() {
                 <a
                   key={product.id}
                   className="hl"
-                  href={`/produto/${product.id}`}
+                  href={`/loja/${shop.slug}/produto/${product.id}`}
                   onClick={(event) => {
                     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                     event.preventDefault();

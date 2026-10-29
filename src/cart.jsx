@@ -1,9 +1,28 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { useCatalog } from "./catalog";
 
-const KEY = "pedido-sacola";
-const CUSTOMER_KEY = "pedido-cliente";
 const CartContext = createContext(null);
+
+function createId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (globalThis.crypto?.getRandomValues) globalThis.crypto.getRandomValues(bytes);
+  else {
+    for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor(Math.random() * 256);
+  }
+  bytes[6] = (bytes[6] & 15) | 64;
+  bytes[8] = (bytes[8] & 63) | 128;
+  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function cartKey(slug) {
+  return `pedido-sacola:${slug}`;
+}
+
+function customerKey(slug) {
+  return `pedido-cliente:${slug}`;
+}
 
 const emptyCustomer = {
   name: "",
@@ -21,27 +40,43 @@ function readStorage(key, fallback) {
   }
 }
 
-function loadLines() {
-  const data = readStorage(KEY, []);
+function loadLines(slug) {
+  const data = readStorage(cartKey(slug), []);
   if (!Array.isArray(data)) return [];
   return data.filter((line) => line && line.productId && line.qty > 0 && Array.isArray(line.options));
 }
 
 export function CartProvider({ children }) {
-  const { getProduct } = useCatalog();
-  const [lines, setLines] = useState(loadLines);
-  const [customer, setCustomerState] = useState(() => ({
-    ...emptyCustomer,
-    ...readStorage(CUSTOMER_KEY, {}),
-  }));
+  const { getProduct, shop } = useCatalog();
+  const slug = shop.slug || "";
+  const [lines, setLines] = useState([]);
+  const [customer, setCustomerState] = useState(emptyCustomer);
+  const skipSave = useRef(false);
 
   useEffect(() => {
-    localStorage.setItem(KEY, JSON.stringify(lines));
-  }, [lines]);
+    skipSave.current = true;
+    if (!slug) {
+      setLines([]);
+      setCustomerState(emptyCustomer);
+      return;
+    }
+    setLines(loadLines(slug));
+    setCustomerState({ ...emptyCustomer, ...readStorage(customerKey(slug), {}) });
+  }, [slug]);
 
   useEffect(() => {
-    localStorage.setItem(CUSTOMER_KEY, JSON.stringify(customer));
-  }, [customer]);
+    if (!slug) return;
+    if (skipSave.current) {
+      skipSave.current = false;
+      return;
+    }
+    localStorage.setItem(cartKey(slug), JSON.stringify(lines));
+  }, [lines, slug]);
+
+  useEffect(() => {
+    if (!slug || skipSave.current) return;
+    localStorage.setItem(customerKey(slug), JSON.stringify(customer));
+  }, [customer, slug]);
 
   const detailed = lines
     .map((line) => {
@@ -61,7 +96,7 @@ export function CartProvider({ children }) {
       setCustomerState((current) => ({ ...current, ...patch }));
     },
     addLine(line) {
-      setLines((current) => [...current, { ...line, id: crypto.randomUUID() }]);
+      setLines((current) => [...current, { ...line, id: createId() }]);
     },
     updateLine(id, line) {
       setLines((current) => current.map((item) => (item.id === id ? { ...line, id } : item)));

@@ -1,15 +1,21 @@
 import { shop as defaultShop } from "./config";
+import { slugify } from "./format";
 import { seedCategories, seedProducts } from "./menu";
 import { supabase } from "./supabase";
 
 export function explain(error) {
   const code = error?.code || "";
   const message = error?.message || "";
+  if (/slug/i.test(message) && /column|schema cache/i.test(message)) {
+    return "Falta atualizar a base. Rode o schema.sql de novo no Supabase.";
+  }
   if (code === "PGRST205" || code === "42P01" || /schema cache/i.test(message)) {
     return "As tabelas da loja ainda não existem no Supabase.";
   }
   if (code === "23503") return "Essa categoria ainda tem produtos vinculados.";
-  if (code === "23505" || /shop exists/i.test(message)) return "Esta loja já tem uma conta.";
+  if (/shops_slug_key|slug taken/i.test(message)) return "Já existe uma loja com esse endereço. Escolha outro nome.";
+  if (/invalid slug/i.test(message)) return "O nome da loja precisa ter letras ou números.";
+  if (code === "23505" || /shop exists/i.test(message)) return "Esta conta já tem uma loja.";
   if (code === "PGRST202") return "A base ainda não permite apagar a conta. Rode o SQL da loja de novo.";
   if (/bucket not found/i.test(message)) return "O espaço de fotos ainda não foi criado no Supabase.";
   if (/not authenticated/i.test(message) || code === "PGRST301") return "Sua sessão expirou. Entre de novo.";
@@ -31,6 +37,7 @@ function toStore(shop, categories, products) {
     ownerId: shop.owner_id,
     shop: {
       name: shop.name,
+      slug: shop.slug || slugify(shop.name),
       whatsapp: shop.whatsapp || "",
       address: shop.address || "",
       hours: shop.hours || "",
@@ -52,9 +59,21 @@ function toStore(shop, categories, products) {
   };
 }
 
-export async function fetchStore() {
-  const { data: shop, error } = await supabase.from("shops").select("*").order("created_at").limit(1).maybeSingle();
-  if (error) return { error: explain(error), store: null };
+function toSummary(shop) {
+  return {
+    id: shop.id,
+    slug: shop.slug || slugify(shop.name),
+    ownerId: shop.owner_id,
+    name: shop.name,
+    address: shop.address || "",
+    hours: shop.hours || "",
+    open: shop.is_open !== false,
+    openLabel: shop.open_label || defaultShop.openLabel,
+    closedLabel: shop.closed_label || defaultShop.closedLabel,
+  };
+}
+
+async function loadShop(shop) {
   if (!shop) return { error: "", store: null };
 
   const [categoriesResult, productsResult] = await Promise.all([
@@ -66,9 +85,43 @@ export async function fetchStore() {
   return { error: "", store: toStore(shop, categoriesResult.data, productsResult.data) };
 }
 
-export async function createSeedShop() {
+export async function fetchShops() {
+  const { data, error } = await supabase.from("shops").select("*").order("name");
+  if (error) return { error: explain(error), shops: [] };
+  return { error: "", shops: (data || []).map(toSummary) };
+}
+
+function missingSlugColumn(error) {
+  const message = error?.message || "";
+  return /slug/i.test(message) && /column|schema cache/i.test(message);
+}
+
+export async function fetchStoreBySlug(slug) {
+  const { data: shop, error } = await supabase.from("shops").select("*").eq("slug", slug).maybeSingle();
+  if (error && missingSlugColumn(error)) {
+    const list = await fetchShops();
+    if (list.error) return { error: list.error, store: null };
+    const match = list.shops.find((item) => item.slug === slug);
+    if (!match) return { error: "", store: null };
+    const found = await supabase.from("shops").select("*").eq("id", match.id).maybeSingle();
+    if (found.error) return { error: explain(found.error), store: null };
+    return loadShop(found.data);
+  }
+  if (error) return { error: explain(error), store: null };
+  return loadShop(shop);
+}
+
+export async function fetchStoreByOwner(ownerId) {
+  const { data: shop, error } = await supabase.from("shops").select("*").eq("owner_id", ownerId).maybeSingle();
+  if (error) return { error: explain(error), store: null };
+  return loadShop(shop);
+}
+
+export async function createSeedShop(name) {
+  const shopName = String(name || defaultShop.name).trim() || defaultShop.name;
   const shop = {
-    name: defaultShop.name,
+    name: shopName,
+    slug: slugify(shopName),
     whatsapp: defaultShop.whatsapp,
     address: defaultShop.address,
     hours: defaultShop.hours,
@@ -94,7 +147,7 @@ export async function createSeedShop() {
   }));
   const { error } = await supabase.rpc("create_store", { shop, categories, products });
   if (error) return { error: explain(error), store: null };
-  return fetchStore();
+  return fetchStoreBySlug(shop.slug);
 }
 
 export async function deleteMyAccount(userId) {
@@ -107,18 +160,19 @@ export async function deleteMyAccount(userId) {
 }
 
 export async function saveShopRow(shopId, shop) {
-  const { error } = await supabase
-    .from("shops")
-    .update({
-      name: shop.name,
-      whatsapp: shop.whatsapp,
-      address: shop.address,
-      hours: shop.hours,
-      is_open: shop.open,
-      open_label: shop.openLabel,
-      closed_label: shop.closedLabel,
-    })
-    .eq("id", shopId);
+  const fields = {
+    name: shop.name,
+    whatsapp: shop.whatsapp,
+    address: shop.address,
+    hours: shop.hours,
+    is_open: shop.open,
+    open_label: shop.openLabel,
+    closed_label: shop.closedLabel,
+  };
+  let { error } = await supabase.from("shops").update({ ...fields, slug: shop.slug }).eq("id", shopId);
+  if (error && missingSlugColumn(error)) {
+    ({ error } = await supabase.from("shops").update(fields).eq("id", shopId));
+  }
   return error ? explain(error) : "";
 }
 

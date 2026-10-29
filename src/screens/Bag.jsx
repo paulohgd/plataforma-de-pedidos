@@ -1,3 +1,4 @@
+import { useCatalog } from "../catalog";
 import { money } from "../format";
 import { useCart } from "../cart";
 import { useUI } from "../router";
@@ -11,12 +12,18 @@ function summary(line) {
 
 export default function Bag() {
   const { lines, total, setLineQty, clear } = useCart();
-  const { openProduct, openCheckout, goHome } = useUI();
+  const { openProduct, openCheckout, goHome, route } = useUI();
+  const { shop, ready, missing } = useCatalog();
+  const waiting = !ready || (route.slug && shop.slug !== route.slug && !missing);
 
   return (
     <div className="bag-page">
       <PageHead title="Sacola" />
-      {lines.length === 0 ? (
+      {waiting ? (
+        <div className="empty">
+          <h2>Carregando a sacola</h2>
+        </div>
+      ) : lines.length === 0 ? (
         <div className="empty">
           <h2>Sua sacola está vazia</h2>
           <p>Escolha um lanche no cardápio para montar o pedido.</p>

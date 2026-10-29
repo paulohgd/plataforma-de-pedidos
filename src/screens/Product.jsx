@@ -23,7 +23,7 @@ function fromLine(line) {
 export default function Product() {
   const { route, back, share } = useUI();
   const { lines, addLine, updateLine } = useCart();
-  const { shop, getProduct } = useCatalog();
+  const { shop, getProduct, ready: catalogReady, missing } = useCatalog();
   const product = getProduct(route.id);
   const line = lines.find((item) => item.id === route.lineId);
   const [qty, setQty] = useState(line?.qty || 1);
@@ -54,6 +54,22 @@ export default function Product() {
     }, 0);
     return product.price + extras;
   }, [product, groups, picked]);
+
+  if (!catalogReady || (route.slug && shop.slug !== route.slug && !missing)) {
+    return (
+      <div className="product-page">
+        <header className="page-head">
+          <button type="button" className="icon-btn" onClick={back} aria-label="Voltar">
+            <IconBack />
+          </button>
+          <h1>Produto</h1>
+        </header>
+        <div className="empty">
+          <h2>Carregando o produto</h2>
+        </div>
+      </div>
+    );
+  }
 
   if (!product) {
     return (

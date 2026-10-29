@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { money } from "./format";
 import { useCart } from "./cart";
+import { useCatalog } from "./catalog";
+import { money } from "./format";
 import { useUI } from "./router";
 
 export function IconHome({ filled }) {
@@ -87,10 +88,12 @@ export function Thumb({ src, alt = "", className = "thumb" }) {
 
 export function ItemLink({ product }) {
   const { openProduct } = useUI();
+  const { shop } = useCatalog();
+  const href = shop.slug ? `/loja/${shop.slug}/produto/${product.id}` : `/produto/${product.id}`;
   return (
     <a
       className="item"
-      href={`/produto/${product.id}`}
+      href={href}
       onClick={(event) => {
         if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
         event.preventDefault();

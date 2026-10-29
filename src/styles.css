@@ -1117,3 +1117,41 @@ h1, h2, h3 { line-height: 1.2; }
   border: 0;
   pointer-events: none;
 }
+
+.directory {
+  min-height: 100vh;
+  padding: 28px 16px 40px;
+}
+
+.directory h1 {
+  margin: 0 0 8px;
+  font-size: 28px;
+}
+
+.shop-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.shop-link {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  background: var(--card);
+  border: 0;
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.shop-link span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.directory-create {
+  margin-top: 20px;
+}

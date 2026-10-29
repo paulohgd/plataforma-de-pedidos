@@ -2,6 +2,7 @@ import { CatalogProvider } from "./catalog";
 import { CartProvider } from "./cart";
 import { UIProvider, useUI } from "./router";
 import Home from "./screens/Home";
+import Stores from "./screens/Stores";
 import Product from "./screens/Product";
 import Bag from "./screens/Bag";
 import Checkout from "./screens/Checkout";
@@ -14,6 +15,7 @@ function Shell() {
   const { route, toast } = useUI();
   return (
     <div className="app">
+      {route.name === "stores" && <Stores />}
       {route.name === "home" && <Home />}
       {route.name === "product" && <Product key={`${route.id}-${route.lineId || "new"}`} />}
       {route.name === "bag" && <Bag />}

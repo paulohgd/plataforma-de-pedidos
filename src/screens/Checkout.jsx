@@ -7,11 +7,12 @@ import { useUI } from "../router";
 import { PageHead } from "../ui";
 
 export default function Checkout() {
-  const { shop } = useCatalog();
+  const { shop, ready, missing } = useCatalog();
   const { lines, total, customer, setCustomer } = useCart();
-  const { goHome, notify } = useUI();
+  const { goHome, notify, route } = useUI();
   const [error, setError] = useState("");
   const configured = shopWhatsapp(shop).length >= 12;
+  const waiting = !ready || (route.slug && shop.slug !== route.slug && !missing);
   const text = lines.length ? buildOrderText({ shop, customer, lines, total }) : "";
 
   async function submit(event) {
@@ -45,7 +46,11 @@ export default function Checkout() {
   return (
     <div className="checkout-page">
       <PageHead title="Finalizar pedido" />
-      {lines.length === 0 ? (
+      {waiting ? (
+        <div className="empty">
+          <h2>Carregando o pedido</h2>
+        </div>
+      ) : lines.length === 0 ? (
         <div className="empty">
           <h2>Sua sacola está vazia</h2>
           <button type="button" className="primary" onClick={goHome}>
