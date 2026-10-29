@@ -14,6 +14,9 @@ export default function Checkout() {
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const [paying, setPaying] = useState(false);
+  const [sessionId, setSessionId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [publishableKey, setPublishableKey] = useState("");
   const box = useRef(null);
   const checkoutRef = useRef(null);
   const waiting = !ready || (route.slug && shop.slug !== route.slug && !missing);
@@ -25,6 +28,53 @@ export default function Checkout() {
     },
     [],
   );
+
+  useEffect(() => {
+    if (!paying || !clientSecret || !box.current) return undefined;
+    let canceled = false;
+    (async () => {
+      const stripe = await loadStripe(publishableKey);
+      if (!stripe || canceled) return;
+      checkoutRef.current?.destroy?.();
+      const checkout = await stripe.initEmbeddedCheckout({ clientSecret });
+      if (canceled) {
+        checkout.destroy?.();
+        return;
+      }
+      checkoutRef.current = checkout;
+      checkout.mount(box.current);
+    })().catch(() => {
+      if (!canceled) setError("Não foi possível abrir o pagamento.");
+    });
+    return () => {
+      canceled = true;
+      checkoutRef.current?.destroy?.();
+      checkoutRef.current = null;
+    };
+  }, [paying, clientSecret, publishableKey]);
+
+  useEffect(() => {
+    if (!paying || !sessionId || !shop.slug) return undefined;
+    let cancel = false;
+    async function tick() {
+      try {
+        const response = await fetch(`/api/checkout-session?session_id=${encodeURIComponent(sessionId)}`);
+        const payload = await response.json();
+        if (cancel || !payload.paid) return;
+        window.location.assign(
+          `/loja/${encodeURIComponent(shop.slug)}/pedido-pago?session_id=${encodeURIComponent(sessionId)}`,
+        );
+      } catch {
+        /* o webhook ainda pode confirmar o pedido */
+      }
+    }
+    tick();
+    const timer = setInterval(tick, 4000);
+    return () => {
+      cancel = true;
+      clearInterval(timer);
+    };
+  }, [paying, sessionId, shop.slug]);
 
   async function submit(event) {
     event.preventDefault();
@@ -71,16 +121,10 @@ export default function Checkout() {
         setError(payload.error || "Não foi possível iniciar o pagamento.");
         return;
       }
-      const stripe = await loadStripe(payload.publishableKey || shop.stripePublishableKey);
-      if (!stripe) {
-        setError("Não foi possível abrir o pagamento.");
-        return;
-      }
-      checkoutRef.current?.destroy?.();
-      const checkout = await stripe.initEmbeddedCheckout({ clientSecret: payload.clientSecret });
-      checkoutRef.current = checkout;
+      setPublishableKey(payload.publishableKey || shop.stripePublishableKey);
+      setSessionId(payload.sessionId || "");
+      setClientSecret(payload.clientSecret);
       setPaying(true);
-      checkout.mount(box.current);
     } catch {
       setError("Não foi possível falar com o servidor de pagamento. Rode npm run pay.");
     } finally {

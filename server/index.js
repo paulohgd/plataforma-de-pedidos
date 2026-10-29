@@ -127,7 +127,7 @@ async function detectPayment(session, client) {
 }
 
 async function fulfill(session, client) {
-  if (!session || (session.payment_status !== "paid" && session.status !== "complete")) return null;
+  if (!session || session.payment_status !== "paid") return null;
   const orderId = session.metadata?.order_id;
   if (!orderId) return null;
   const paidAt = new Date().toISOString();
@@ -264,6 +264,13 @@ async function createCheckout(request, response) {
         shop_id: store.shopId,
         shop_slug: slug,
       },
+      payment_intent_data: {
+        metadata: {
+          order_id: order.id,
+          shop_id: store.shopId,
+          shop_slug: slug,
+        },
+      },
       line_items: quoted.lines.map((line) => ({
         quantity: line.qty,
         price_data: {
@@ -278,7 +285,12 @@ async function createCheckout(request, response) {
     });
 
     await supabase.from("orders").update({ stripe_session_id: session.id }).eq("id", order.id);
-    json(response, 200, { clientSecret: session.client_secret, orderId: order.id, publishableKey });
+    json(response, 200, {
+      clientSecret: session.client_secret,
+      sessionId: session.id,
+      orderId: order.id,
+      publishableKey,
+    });
   } catch (error) {
     await supabase.from("orders").update({ status: "canceled" }).eq("id", order.id);
     json(response, 500, { error: error.message || "Não foi possível iniciar o pagamento." });
@@ -320,8 +332,75 @@ async function readSession(request, response, url) {
   });
 }
 
+async function findOrderFromEvent(object = {}) {
+  const sessionId = String(object.id || "").startsWith("cs_") ? object.id : "";
+  const intentId = String(object.id || "").startsWith("pi_")
+    ? object.id
+    : typeof object.payment_intent === "string"
+      ? object.payment_intent
+      : object.payment_intent?.id || "";
+  const orderId = String(object.metadata?.order_id || "");
+  if (orderId) {
+    const { data } = await supabase.from("orders").select("id, shop_id, stripe_session_id").eq("id", orderId).maybeSingle();
+    if (data) return data;
+  }
+  if (sessionId) {
+    const { data } = await supabase.from("orders").select("id, shop_id, stripe_session_id").eq("stripe_session_id", sessionId).maybeSingle();
+    if (data) return data;
+  }
+  if (intentId) {
+    const { data } = await supabase.from("orders").select("id, shop_id, stripe_session_id").eq("stripe_payment_intent", intentId).maybeSingle();
+    if (data) return data;
+  }
+  return null;
+}
+
 async function handleWebhook(request, response) {
-  await readBody(request);
+  if (!supabase) {
+    json(response, 200, { received: true });
+    return;
+  }
+  const raw = await readBody(request);
+  let event;
+  try {
+    event = JSON.parse(raw.toString("utf8") || "{}");
+  } catch {
+    json(response, 400, { error: "Webhook inválido." });
+    return;
+  }
+
+  const type = String(event.type || "");
+  const object = event.data?.object || {};
+  const useful =
+    type === "checkout.session.completed" ||
+    type === "checkout.session.async_payment_succeeded" ||
+    type === "payment_intent.succeeded";
+  if (!useful) {
+    json(response, 200, { received: true });
+    return;
+  }
+
+  const order = await findOrderFromEvent(object);
+  const shopId = order?.shop_id || String(object.metadata?.shop_id || "");
+  const client = await stripeForShop(shopId);
+  if (!client) {
+    json(response, 200, { received: true });
+    return;
+  }
+
+  let sessionId = order?.stripe_session_id || "";
+  if (String(object.id || "").startsWith("cs_")) sessionId = object.id;
+  if (!sessionId && String(object.id || "").startsWith("pi_")) {
+    const listed = await client.checkout.sessions.list({ payment_intent: object.id, limit: 1 });
+    sessionId = listed.data[0]?.id || "";
+  }
+  if (!sessionId) {
+    json(response, 200, { received: true });
+    return;
+  }
+
+  const session = await client.checkout.sessions.retrieve(sessionId);
+  await fulfill(session, client);
   json(response, 200, { received: true });
 }
 
