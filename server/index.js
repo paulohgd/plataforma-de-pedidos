@@ -9,12 +9,9 @@ import { cents, quoteCart } from "./quote.js";
 import { sendShopDiscord } from "./discord.js";
 
 const port = Number(process.env.PORT) || 8787;
-const stripeSecret = process.env.STRIPE_SECRET_KEY || "";
-const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || "";
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
-const stripe = stripeSecret ? new Stripe(stripeSecret) : null;
 const supabase =
   supabaseUrl && serviceKey
     ? createClient(supabaseUrl, serviceKey, {
@@ -23,17 +20,13 @@ const supabase =
       })
     : null;
 const discordReady = String(process.env.DISCORD_WEBHOOK_URL || "").startsWith("https://discord.com/api/webhooks/");
-const platformPublishable = process.env.VITE_STRIPE_PUBLISHABLE_KEY || "";
 const stripeClients = new Map();
 const notifiedOrders = new Set();
 
 async function stripeForShop(shopId) {
-  let shopKey = "";
-  if (supabase && shopId) {
-    const { data, error } = await supabase.from("shop_secrets").select("stripe_secret_key").eq("shop_id", shopId).maybeSingle();
-    if (!error) shopKey = String(data?.stripe_secret_key || "").trim();
-  }
-  const key = shopKey || stripeSecret;
+  if (!supabase || !shopId) return null;
+  const { data, error } = await supabase.from("shop_secrets").select("stripe_secret_key").eq("shop_id", shopId).maybeSingle();
+  const key = error ? "" : String(data?.stripe_secret_key || "").trim();
   if (!key) return null;
   if (!stripeClients.has(key)) stripeClients.set(key, new Stripe(key));
   return stripeClients.get(key);
@@ -103,7 +96,7 @@ async function loadShop(slug) {
 }
 
 async function detectPayment(session, client) {
-  const stripeClient = client || stripe;
+  const stripeClient = client;
   const intentId =
     typeof session.payment_intent === "string"
       ? session.payment_intent
@@ -200,7 +193,7 @@ async function createCheckout(request, response) {
   }
 
   const shopStripe = await stripeForShop(store.shopId);
-  const publishableKey = store.shop.stripePublishableKey || platformPublishable;
+  const publishableKey = store.shop.stripePublishableKey;
   if (!shopStripe || !publishableKey) {
     json(response, 503, { error: "Falta configurar as chaves Stripe nas configurações da loja." });
     return;
@@ -294,9 +287,9 @@ async function readSession(request, response, url) {
     return;
   }
   const existing = (await supabase.from("orders").select("shop_id").eq("stripe_session_id", sessionId).maybeSingle()).data;
-  const client = (await stripeForShop(existing?.shop_id)) || stripe;
+  const client = await stripeForShop(existing?.shop_id);
   if (!client) {
-    json(response, 503, { error: "Pagamento ainda não está configurado no servidor." });
+    json(response, 503, { error: "Falta configurar as chaves Stripe nas configurações da loja." });
     return;
   }
   const session = await client.checkout.sessions.retrieve(sessionId);
@@ -319,22 +312,7 @@ async function readSession(request, response, url) {
 }
 
 async function handleWebhook(request, response) {
-  if (!stripe || !supabase || !webhookSecret) {
-    json(response, 503, { error: "Webhook sem STRIPE_WEBHOOK_SECRET." });
-    return;
-  }
-  const raw = await readBody(request);
-  const signature = request.headers["stripe-signature"];
-  let event;
-  try {
-    event = stripe.webhooks.constructEvent(raw, signature, webhookSecret);
-  } catch {
-    json(response, 400, { error: "Assinatura do webhook inválida." });
-    return;
-  }
-  if (event.type === "checkout.session.completed" || event.type === "checkout.session.async_payment_succeeded") {
-    await fulfill(event.data.object, stripe);
-  }
+  await readBody(request);
   json(response, 200, { received: true });
 }
 
@@ -349,7 +327,6 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && url.pathname === "/api/health") {
       json(response, 200, {
         ok: true,
-        stripe: Boolean(stripe),
         database: Boolean(supabase),
         discord: discordReady,
       });

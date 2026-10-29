@@ -7,8 +7,6 @@ import { useCart } from "../cart";
 import { useUI } from "../router";
 import { PageHead } from "../ui";
 
-const platformPublishableKey = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || "";
-
 export default function Checkout() {
   const { shop, ready, missing } = useCatalog();
   const { lines, total, customer, setCustomer } = useCart();
@@ -46,7 +44,7 @@ export default function Checkout() {
       setError("Informe o endereço da entrega.");
       return;
     }
-    if (!platformPublishableKey && !shop.stripePublishableKey) {
+    if (!shop.stripePublishableKey) {
       setError("Falta a chave publicável da Stripe nas configurações da loja.");
       return;
     }
@@ -73,7 +71,7 @@ export default function Checkout() {
         setError(payload.error || "Não foi possível iniciar o pagamento.");
         return;
       }
-      const stripe = await loadStripe(payload.publishableKey || shop.stripePublishableKey || platformPublishableKey);
+      const stripe = await loadStripe(payload.publishableKey || shop.stripePublishableKey);
       if (!stripe) {
         setError("Não foi possível abrir o pagamento.");
         return;
