@@ -19,17 +19,24 @@ const supabase =
         realtime: { transport: WebSocket },
       })
     : null;
-const discordReady = String(process.env.DISCORD_WEBHOOK_URL || "").startsWith("https://discord.com/api/webhooks/");
 const stripeClients = new Map();
 const notifiedOrders = new Set();
 
+async function loadShopSecrets(shopId) {
+  if (!supabase || !shopId) return { stripeSecret: "", discordWebhook: "" };
+  const { data, error } = await supabase.from("shop_secrets").select("*").eq("shop_id", shopId).maybeSingle();
+  if (error || !data) return { stripeSecret: "", discordWebhook: "" };
+  return {
+    stripeSecret: String(data.stripe_secret_key || "").trim(),
+    discordWebhook: String(data.discord_webhook_url || "").trim(),
+  };
+}
+
 async function stripeForShop(shopId) {
-  if (!supabase || !shopId) return null;
-  const { data, error } = await supabase.from("shop_secrets").select("stripe_secret_key").eq("shop_id", shopId).maybeSingle();
-  const key = error ? "" : String(data?.stripe_secret_key || "").trim();
-  if (!key) return null;
-  if (!stripeClients.has(key)) stripeClients.set(key, new Stripe(key));
-  return stripeClients.get(key);
+  const { stripeSecret } = await loadShopSecrets(shopId);
+  if (!stripeSecret) return null;
+  if (!stripeClients.has(stripeSecret)) stripeClients.set(stripeSecret, new Stripe(stripeSecret));
+  return stripeClients.get(stripeSecret);
 }
 
 function json(response, status, payload) {
@@ -141,7 +148,8 @@ async function fulfill(session, client) {
     data.whatsapp_text = withPaidPayment(data.whatsapp_text, payment);
     await supabase.from("orders").update({ whatsapp_text: data.whatsapp_text }).eq("id", data.id);
     const shop = (await supabase.from("shops").select("name").eq("id", data.shop_id).maybeSingle()).data;
-    const sent = await sendShopDiscord(shop, data.whatsapp_text);
+    const secrets = await loadShopSecrets(data.shop_id);
+    const sent = await sendShopDiscord(shop, data.whatsapp_text, secrets.discordWebhook);
     if (sent.sent) {
       data.whatsapp_sent_at = new Date().toISOString();
       const stampedRow = await supabase
@@ -328,7 +336,6 @@ const server = http.createServer(async (request, response) => {
       json(response, 200, {
         ok: true,
         database: Boolean(supabase),
-        discord: discordReady,
       });
       return;
     }

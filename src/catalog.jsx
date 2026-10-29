@@ -14,7 +14,7 @@ import {
   fetchStoreBySlug,
   insertCategory,
   saveShopRow,
-  saveShopSecret,
+  saveShopSecrets,
   updateCategoryName,
   uploadProductImage,
   upsertProduct,
@@ -359,7 +359,10 @@ export function CatalogProvider({ children }) {
       nextShop.slug = slugify(nextShop.name);
       const error = await saveShopRow(store.shopId, nextShop);
       if (error) return error;
-      const secretError = await saveShopSecret(store.shopId, shop.stripeSecretKey);
+      const secretError = await saveShopSecrets(store.shopId, {
+        stripeSecretKey: shop.stripeSecretKey,
+        discordWebhookUrl: shop.discordWebhookUrl,
+      });
       if (secretError) return secretError;
       const nextStore = { ...storeRef.current, shop: nextShop };
       storeRef.current = nextStore;

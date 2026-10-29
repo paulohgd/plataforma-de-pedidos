@@ -4,10 +4,10 @@ function toDiscordMarkdown(text) {
     .replace(/_([^_\n]+)_/g, "*$1*");
 }
 
-export async function sendShopDiscord(shop, text) {
-  const url = process.env.DISCORD_WEBHOOK_URL || "";
+export async function sendShopDiscord(shop, text, webhookUrl = "") {
+  const url = String(webhookUrl || "").trim();
   if (!url.startsWith("https://discord.com/api/webhooks/")) {
-    return { sent: false, error: "Falta configurar DISCORD_WEBHOOK_URL no .env.server." };
+    return { sent: false, error: "Falta o webhook do Discord nas configurações da loja." };
   }
   if (!text) return { sent: false, error: "Pedido sem texto para enviar." };
 

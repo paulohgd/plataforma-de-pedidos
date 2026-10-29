@@ -163,24 +163,48 @@ export async function deleteMyAccount(userId) {
 }
 
 export async function fetchShopSecretStatus(shopId) {
-  const { data, error } = await supabase
+  const { data, error } = await supabase.from("shop_secrets").select("*").eq("shop_id", shopId).maybeSingle();
+  if (error) return { error: explain(error), stripe: false, discord: false };
+  return {
+    error: "",
+    stripe: Boolean(String(data?.stripe_secret_key || "").trim()),
+    discord: Boolean(String(data?.discord_webhook_url || "").trim()),
+  };
+}
+
+export async function saveShopSecrets(shopId, { stripeSecretKey, discordWebhookUrl }) {
+  const stripe = String(stripeSecretKey || "").trim();
+  const discord = String(discordWebhookUrl || "").trim();
+  if (stripe && !/^sk_(test|live)_/.test(stripe)) {
+    return "A chave secreta da Stripe deve começar com sk_test_ ou sk_live_.";
+  }
+  if (discord && !discord.startsWith("https://discord.com/api/webhooks/")) {
+    return "O webhook do Discord deve começar com https://discord.com/api/webhooks/";
+  }
+  if (!stripe && !discord) return "";
+
+  const patch = { updated_at: new Date().toISOString() };
+  if (stripe) patch.stripe_secret_key = stripe;
+  if (discord) patch.discord_webhook_url = discord;
+
+  const { data: existing, error: lookupError } = await supabase
     .from("shop_secrets")
     .select("shop_id")
     .eq("shop_id", shopId)
-    .neq("stripe_secret_key", "")
     .maybeSingle();
-  if (error) return { error: explain(error), configured: false };
-  return { error: "", configured: Boolean(data) };
-}
+  if (lookupError) return explain(lookupError);
 
-export async function saveShopSecret(shopId, secretKey) {
-  const key = String(secretKey || "").trim();
-  if (!key) return "";
-  if (!/^sk_(test|live)_/.test(key)) return "A chave secreta da Stripe deve começar com sk_test_ ou sk_live_.";
-  const { error } = await supabase.from("shop_secrets").upsert(
-    { shop_id: shopId, stripe_secret_key: key, updated_at: new Date().toISOString() },
-    { onConflict: "shop_id" },
-  );
+  if (existing) {
+    const { error } = await supabase.from("shop_secrets").update(patch).eq("shop_id", shopId);
+    return error ? explain(error) : "";
+  }
+
+  const { error } = await supabase.from("shop_secrets").insert({
+    shop_id: shopId,
+    stripe_secret_key: stripe,
+    discord_webhook_url: discord,
+    updated_at: patch.updated_at,
+  });
   return error ? explain(error) : "";
 }
 

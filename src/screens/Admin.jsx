@@ -109,7 +109,7 @@ function AdminPanel() {
   const [orders, setOrders] = useState([]);
   const [categoryName, setCategoryName] = useState("");
   const [confirmAccount, setConfirmAccount] = useState(false);
-  const [secretSaved, setSecretSaved] = useState(false);
+  const [secretsSaved, setSecretsSaved] = useState({ stripe: false, discord: false });
   const [shopForm, setShopForm] = useState({
     name: shop.name,
     whatsapp: shop.whatsapp,
@@ -120,6 +120,7 @@ function AdminPanel() {
     closedLabel: shop.closedLabel,
     stripePublishableKey: shop.stripePublishableKey || "",
     stripeSecretKey: "",
+    discordWebhookUrl: "",
     paidTitle: shop.paidTitle || paidTitle,
     paidMessage: shop.paidMessage || paidMessage,
   });
@@ -139,6 +140,7 @@ function AdminPanel() {
       closedLabel: shop.closedLabel,
       stripePublishableKey: shop.stripePublishableKey || "",
       stripeSecretKey: "",
+      discordWebhookUrl: "",
       paidTitle: shop.paidTitle || paidTitle,
       paidMessage: shop.paidMessage || paidMessage,
     });
@@ -149,7 +151,7 @@ function AdminPanel() {
     let cancel = false;
     fetchShopSecretStatus(shopId).then((result) => {
       if (cancel || result.error) return;
-      setSecretSaved(result.configured);
+      setSecretsSaved({ stripe: result.stripe, discord: result.discord });
     });
     return () => {
       cancel = true;
@@ -200,8 +202,11 @@ function AdminPanel() {
       return;
     }
     setError("");
-    setShopForm((current) => ({ ...current, stripeSecretKey: "" }));
-    if (shopForm.stripeSecretKey.trim()) setSecretSaved(true);
+    setShopForm((current) => ({ ...current, stripeSecretKey: "", discordWebhookUrl: "" }));
+    setSecretsSaved((current) => ({
+      stripe: current.stripe || Boolean(shopForm.stripeSecretKey.trim()),
+      discord: current.discord || Boolean(shopForm.discordWebhookUrl.trim()),
+    }));
     notify("Dados da loja salvos.");
   }
 
@@ -414,11 +419,23 @@ function AdminPanel() {
               type="password"
               autoComplete="new-password"
               spellCheck="false"
-              placeholder={secretSaved ? "Salva. Cole outra só se for trocar." : "sk_test_..."}
+              placeholder={secretsSaved.stripe ? "Salva. Cole outra só se for trocar." : "sk_test_..."}
               value={shopForm.stripeSecretKey}
               onChange={(event) => setShopForm({ ...shopForm, stripeSecretKey: event.target.value })}
             />
           </label>
+          <label>
+            Webhook do Discord
+            <input
+              type="password"
+              autoComplete="off"
+              spellCheck="false"
+              placeholder={secretsSaved.discord ? "Salvo. Cole outro só se for trocar." : "https://discord.com/api/webhooks/..."}
+              value={shopForm.discordWebhookUrl}
+              onChange={(event) => setShopForm({ ...shopForm, discordWebhookUrl: event.target.value })}
+            />
+          </label>
+          <p className="hint">O pedido pago é enviado neste webhook da loja.</p>
           <h3 className="admin-subtitle">Pedido pago</h3>
           <p className="hint">Essa é a mensagem que o cliente vê depois que o pagamento confirma. Use **texto** para negrito.</p>
           <label>

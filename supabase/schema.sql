@@ -39,8 +39,11 @@ Agradecemos pela preferência! 😊';
 create table if not exists public.shop_secrets (
   shop_id uuid primary key references public.shops (id) on delete cascade,
   stripe_secret_key text not null default '',
+  discord_webhook_url text not null default '',
   updated_at timestamptz not null default now()
 );
+
+alter table public.shop_secrets add column if not exists discord_webhook_url text not null default '';
 
 alter table public.shop_secrets enable row level security;
 grant select, insert, update, delete on public.shop_secrets to authenticated;
