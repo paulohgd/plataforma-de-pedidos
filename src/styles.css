@@ -807,6 +807,48 @@ h1, h2, h3 { line-height: 1.2; }
 
 .checkout-page { min-height: 100vh; padding-bottom: 28px; }
 
+.paid-box {
+  text-align: center;
+  padding: 40px 20px 48px;
+}
+
+.paid-box h2 {
+  font-size: 32px;
+}
+
+.paid-box p {
+  max-width: 22em;
+  font-size: 17px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.paid-box .primary {
+  margin-top: 16px;
+}
+
+.admin-subtitle {
+  margin: 20px 0 0;
+  font-size: 16px;
+}
+
+.paid-preview {
+  min-height: 0;
+  padding: 16px;
+  background: var(--card);
+  border-radius: 12px;
+  pointer-events: none;
+}
+
+.stripe-box {
+  min-height: 420px;
+  margin-top: 8px;
+}
+
+.stripe-box[hidden] {
+  display: none;
+}
+
 .form {
   padding: 16px;
   display: flex;

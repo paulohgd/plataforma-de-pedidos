@@ -12,6 +12,11 @@ create table if not exists public.shops (
   open_label text not null default 'Aberto agora',
   closed_label text not null default 'Loja fechada',
   slug text,
+  stripe_publishable_key text not null default '',
+  paid_title text not null default 'Oba! 🎉',
+  paid_message text not null default 'Recebemos seu pedido e ele já está sendo preparado! O prazo médio de preparação é de **1 hora**.
+
+Agradecemos pela preferência! 😊',
   created_at timestamptz not null default now()
 );
 
@@ -25,6 +30,37 @@ alter table public.shops
 alter table public.shops alter column owner_id set not null;
 
 alter table public.shops add column if not exists slug text;
+alter table public.shops add column if not exists stripe_publishable_key text not null default '';
+alter table public.shops add column if not exists paid_title text not null default 'Oba! 🎉';
+alter table public.shops add column if not exists paid_message text not null default 'Recebemos seu pedido e ele já está sendo preparado! O prazo médio de preparação é de **1 hora**.
+
+Agradecemos pela preferência! 😊';
+
+create table if not exists public.shop_secrets (
+  shop_id uuid primary key references public.shops (id) on delete cascade,
+  stripe_secret_key text not null default '',
+  updated_at timestamptz not null default now()
+);
+
+alter table public.shop_secrets enable row level security;
+grant select, insert, update, delete on public.shop_secrets to authenticated;
+grant all on public.shop_secrets to service_role;
+
+drop policy if exists shop_secrets_owner on public.shop_secrets;
+create policy shop_secrets_owner on public.shop_secrets
+  for all to authenticated
+  using (
+    exists (
+      select 1 from public.shops
+      where shops.id = shop_secrets.shop_id and shops.owner_id = auth.uid()
+    )
+  )
+  with check (
+    exists (
+      select 1 from public.shops
+      where shops.id = shop_secrets.shop_id and shops.owner_id = auth.uid()
+    )
+  );
 
 update public.shops
 set slug = trim(both '-' from regexp_replace(lower(name), '[^a-z0-9]+', '-', 'g'))
@@ -283,4 +319,46 @@ create policy products_bucket_delete on storage.objects
   using (
     bucket_id = 'products'
     and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+create table if not exists public.orders (
+  id uuid primary key default gen_random_uuid(),
+  shop_id uuid not null references public.shops (id) on delete cascade,
+  status text not null default 'pending',
+  customer_name text not null default '',
+  customer_mode text not null default 'retirada',
+  customer_address text not null default '',
+  customer_notes text not null default '',
+  items jsonb not null default '[]'::jsonb,
+  total numeric(10, 2) not null default 0,
+  whatsapp_text text not null default '',
+  stripe_session_id text,
+  stripe_payment_intent text not null default '',
+  paid_at timestamptz,
+  whatsapp_sent_at timestamptz,
+  created_at timestamptz not null default now(),
+  constraint orders_status check (status in ('pending', 'paid', 'canceled')),
+  constraint orders_mode check (customer_mode in ('retirada', 'entrega')),
+  constraint orders_total check (total >= 0)
+);
+
+alter table public.orders add column if not exists whatsapp_sent_at timestamptz;
+
+create unique index if not exists orders_stripe_session_key on public.orders (stripe_session_id) where stripe_session_id is not null;
+create index if not exists orders_shop_created_key on public.orders (shop_id, created_at desc);
+
+alter table public.orders enable row level security;
+grant select on public.orders to authenticated;
+grant insert, update, delete on public.orders to service_role;
+
+drop policy if exists orders_select on public.orders;
+drop policy if exists orders_write on public.orders;
+
+create policy orders_select on public.orders
+  for select to authenticated
+  using (
+    exists (
+      select 1 from public.shops
+      where shops.id = orders.shop_id and shops.owner_id = auth.uid()
+    )
   );

@@ -1,24 +1,41 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { loadStripe } from "@stripe/stripe-js";
 import { useCatalog } from "../catalog";
 import { money } from "../format";
-import { buildOrderText, openWhatsApp, shopWhatsapp } from "../order";
+import { buildOrderText } from "../order";
 import { useCart } from "../cart";
 import { useUI } from "../router";
 import { PageHead } from "../ui";
 
+const platformPublishableKey = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || "";
+
 export default function Checkout() {
   const { shop, ready, missing } = useCatalog();
   const { lines, total, customer, setCustomer } = useCart();
-  const { goHome, notify, route } = useUI();
+  const { goHome, route } = useUI();
   const [error, setError] = useState("");
-  const configured = shopWhatsapp(shop).length >= 12;
+  const [pending, setPending] = useState(false);
+  const [paying, setPaying] = useState(false);
+  const box = useRef(null);
+  const checkoutRef = useRef(null);
   const waiting = !ready || (route.slug && shop.slug !== route.slug && !missing);
   const text = lines.length ? buildOrderText({ shop, customer, lines, total }) : "";
+
+  useEffect(
+    () => () => {
+      checkoutRef.current?.destroy?.();
+    },
+    [],
+  );
 
   async function submit(event) {
     event.preventDefault();
     if (!lines.length) {
       setError("Adicione itens na sacola.");
+      return;
+    }
+    if (!shop.open) {
+      setError("A loja está fechada no momento.");
       return;
     }
     if (customer.name.trim().length < 2) {
@@ -29,17 +46,47 @@ export default function Checkout() {
       setError("Informe o endereço da entrega.");
       return;
     }
-    setError("");
-    const opened = openWhatsApp(shop, text);
-    if (opened) {
-      notify("Pedido aberto no WhatsApp.");
+    if (!platformPublishableKey && !shop.stripePublishableKey) {
+      setError("Falta a chave publicável da Stripe nas configurações da loja.");
       return;
     }
+    setPending(true);
+    setError("");
     try {
-      await navigator.clipboard.writeText(text);
-      setError("Mensagem copiada. Para abrir o WhatsApp direto, cadastre o número na área da loja.");
+      const response = await fetch("/api/create-checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          slug: shop.slug,
+          origin: window.location.origin,
+          customer,
+          lines: lines.map((line) => ({
+            productId: line.productId,
+            qty: line.qty,
+            note: line.note,
+            options: line.options,
+          })),
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.clientSecret) {
+        setError(payload.error || "Não foi possível iniciar o pagamento.");
+        return;
+      }
+      const stripe = await loadStripe(payload.publishableKey || shop.stripePublishableKey || platformPublishableKey);
+      if (!stripe) {
+        setError("Não foi possível abrir o pagamento.");
+        return;
+      }
+      checkoutRef.current?.destroy?.();
+      const checkout = await stripe.initEmbeddedCheckout({ clientSecret: payload.clientSecret });
+      checkoutRef.current = checkout;
+      setPaying(true);
+      checkout.mount(box.current);
     } catch {
-      setError("Cadastre o número da loja na área da loja para enviar pelo WhatsApp.");
+      setError("Não foi possível falar com o servidor de pagamento. Rode npm run pay.");
+    } finally {
+      setPending(false);
     }
   }
 
@@ -66,6 +113,7 @@ export default function Checkout() {
               autoComplete="name"
               maxLength={80}
               placeholder="Nome e sobrenome"
+              disabled={paying}
               onChange={(event) => setCustomer({ name: event.target.value })}
             />
           </label>
@@ -77,6 +125,7 @@ export default function Checkout() {
                 type="button"
                 className="choice"
                 aria-pressed={customer.mode === "retirada"}
+                disabled={paying}
                 onClick={() => setCustomer({ mode: "retirada" })}
               >
                 <span>Retirada no balcão</span>
@@ -86,6 +135,7 @@ export default function Checkout() {
                 type="button"
                 className="choice"
                 aria-pressed={customer.mode === "entrega"}
+                disabled={paying}
                 onClick={() => setCustomer({ mode: "entrega" })}
               >
                 <span>Entrega</span>
@@ -102,6 +152,7 @@ export default function Checkout() {
                 autoComplete="street-address"
                 maxLength={160}
                 placeholder="Rua, número e bairro"
+                disabled={paying}
                 onChange={(event) => setCustomer({ address: event.target.value })}
               />
             </label>
@@ -114,6 +165,7 @@ export default function Checkout() {
               maxLength={200}
               placeholder="Ex.: sem pressa, interfone 2"
               value={customer.notes}
+              disabled={paying}
               onChange={(event) => setCustomer({ notes: event.target.value })}
             />
           </label>
@@ -134,19 +186,18 @@ export default function Checkout() {
             </p>
           </section>
 
-          <pre className="preview">{text}</pre>
+          {!paying ? <pre className="preview">{text}</pre> : null}
 
           {error ? <p className="form-error">{error}</p> : null}
-          {!configured ? (
-            <p className="hint">O número de WhatsApp da loja ainda não foi configurado. Cadastre em Mais informações, Configurar a loja.</p>
-          ) : (
-            <p className="hint">Ao continuar, o pedido abre no WhatsApp de {shop.name}, pronto para enviar.</p>
-          )}
+          <p className="hint">Pague agora. Depois da confirmação, o pedido vai direto para a loja.</p>
 
-          <button type="submit" className="primary">
-            <span>Enviar no WhatsApp</span>
-            <span>{money(total)}</span>
-          </button>
+          {paying ? null : (
+            <button type="submit" className="primary" disabled={pending}>
+              <span>{pending ? "Abrindo pagamento…" : "Pagar"}</span>
+              <span>{money(total)}</span>
+            </button>
+          )}
+          <div ref={box} className="stripe-box" hidden={!paying} />
         </form>
       )}
     </div>

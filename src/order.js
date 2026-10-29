@@ -1,4 +1,4 @@
-import { money } from "./format";
+import { money } from "./format.js";
 
 export function shopWhatsapp(shop) {
   return String(shop?.whatsapp || "").replace(/\D/g, "");
@@ -10,9 +10,30 @@ function shortGroup(name) {
   return name;
 }
 
-export function buildOrderText({ shop, customer, lines, total }) {
+export function paymentMethodName(kind = "card") {
+  if (kind === "pix") return "Pix";
+  if (kind === "google_pay") return "Google Pay";
+  return "cartão";
+}
+
+export function paymentKindFromStripe({ type = "", wallet = "" } = {}) {
+  const method = String(type || "").toLowerCase();
+  const walletType = String(wallet || "").toLowerCase();
+  if (method === "pix") return "pix";
+  if (walletType === "google_pay") return "google_pay";
+  return "card";
+}
+
+export function withPaidPayment(text, kind = "card") {
+  const line = `*Pagamento:* confirmado no ${paymentMethodName(kind)}`;
+  const source = String(text || "");
+  if (/\*Pagamento:\*/.test(source)) return source.replace(/\*Pagamento:\*.*/g, line);
+  return `${source.trim()}\n${line}`;
+}
+
+export function buildOrderText({ shop, customer, lines, total, paid = false, payment = "card" }) {
   const out = [
-    `*${shop.name} — novo pedido*`,
+    paid ? `*${shop.name} — pedido pago*` : `*${shop.name} — novo pedido*`,
     "",
     `*Cliente:* ${customer.name.trim()}`,
     `*Tipo:* ${customer.mode === "entrega" ? "Entrega" : "Retirada"}`,
@@ -34,6 +55,7 @@ export function buildOrderText({ shop, customer, lines, total }) {
   }
 
   out.push("", `*Total: ${money(total)}*`);
+  if (paid) out.push(`*Pagamento:* confirmado no ${paymentMethodName(payment)}`);
 
   if (customer.notes?.trim()) {
     out.push("", `*Observações:* ${customer.notes.trim()}`);

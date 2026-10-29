@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useContext, useCallback, useEffect, useRef, useState } from "react";
 import { useCatalog } from "./catalog";
 
 const CartContext = createContext(null);
@@ -78,6 +78,10 @@ export function CartProvider({ children }) {
     localStorage.setItem(customerKey(slug), JSON.stringify(customer));
   }, [customer, slug]);
 
+  const clear = useCallback(() => {
+    setLines([]);
+  }, []);
+
   const detailed = lines
     .map((line) => {
       const product = getProduct(line.productId);
@@ -107,9 +111,7 @@ export function CartProvider({ children }) {
         return current.map((item) => (item.id === id ? { ...item, qty: Math.min(qty, 20) } : item));
       });
     },
-    clear() {
-      setLines([]);
-    },
+    clear,
   };
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;

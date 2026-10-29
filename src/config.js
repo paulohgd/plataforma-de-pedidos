@@ -1,3 +1,7 @@
+export const paidTitle = "Oba! 🎉";
+export const paidMessage =
+  "Recebemos seu pedido e ele já está sendo preparado! O prazo médio de preparação é de **1 hora**.\n\nAgradecemos pela preferência! 😊";
+
 export const shop = {
   name: "Brasa Burger",
   /**

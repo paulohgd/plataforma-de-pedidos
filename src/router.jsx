@@ -55,7 +55,16 @@ export function UIProvider({ children }) {
 
   useEffect(() => {
     const area = route.name === "access" || route.name === "admin" || route.name === "product-form";
-    document.title = route.name === "stores" ? "Lojas" : area ? "Área da loja" : missing ? "Loja não encontrada" : shop.name || "Cardápio";
+    document.title =
+      route.name === "stores"
+        ? "Lojas"
+        : route.name === "paid"
+          ? "Pedido pago"
+          : area
+            ? "Área da loja"
+            : missing
+              ? "Loja não encontrada"
+              : shop.name || "Cardápio";
   }, [route.name, shop.name, missing]);
 
   useEffect(() => () => clearTimeout(toastTimer.current), []);

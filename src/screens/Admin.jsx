@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
+import { paidMessage, paidTitle } from "../config";
 import { useCatalog } from "../catalog";
 import { money, slugify } from "../format";
+import { PaidCopy } from "../PaidCopy";
+import { fetchShopOrders, fetchShopSecretStatus } from "../remote";
 import { useUI } from "../router";
 import { PageHead, Thumb } from "../ui";
 import RequireOwner from "./RequireOwner";
@@ -99,12 +102,14 @@ function ProductRow({ product, categoryName, onEdit, onRemove }) {
 }
 
 function AdminPanel() {
-  const { shop, categories, products, account, logout, updateShop, addCategory, renameCategory, removeCategory, removeProduct, removeAccount } = useCatalog();
+  const { shop, shopId, categories, products, account, logout, updateShop, addCategory, renameCategory, removeCategory, removeProduct, removeAccount } = useCatalog();
   const { route, goHome, openAdmin, openProductForm, notify } = useUI();
   const [tab, setTab] = useState(route.tab || "produtos");
   const [error, setError] = useState("");
+  const [orders, setOrders] = useState([]);
   const [categoryName, setCategoryName] = useState("");
   const [confirmAccount, setConfirmAccount] = useState(false);
+  const [secretSaved, setSecretSaved] = useState(false);
   const [shopForm, setShopForm] = useState({
     name: shop.name,
     whatsapp: shop.whatsapp,
@@ -113,11 +118,56 @@ function AdminPanel() {
     open: shop.open,
     openLabel: shop.openLabel,
     closedLabel: shop.closedLabel,
+    stripePublishableKey: shop.stripePublishableKey || "",
+    stripeSecretKey: "",
+    paidTitle: shop.paidTitle || paidTitle,
+    paidMessage: shop.paidMessage || paidMessage,
   });
 
   useEffect(() => {
     if (route.tab) setTab(route.tab);
   }, [route.tab]);
+
+  useEffect(() => {
+    setShopForm({
+      name: shop.name,
+      whatsapp: shop.whatsapp,
+      address: shop.address,
+      hours: shop.hours,
+      open: shop.open,
+      openLabel: shop.openLabel,
+      closedLabel: shop.closedLabel,
+      stripePublishableKey: shop.stripePublishableKey || "",
+      stripeSecretKey: "",
+      paidTitle: shop.paidTitle || paidTitle,
+      paidMessage: shop.paidMessage || paidMessage,
+    });
+  }, [shop]);
+
+  useEffect(() => {
+    if (!shopId) return;
+    let cancel = false;
+    fetchShopSecretStatus(shopId).then((result) => {
+      if (cancel || result.error) return;
+      setSecretSaved(result.configured);
+    });
+    return () => {
+      cancel = true;
+    };
+  }, [shopId]);
+
+  useEffect(() => {
+    if (tab !== "pedidos" || !shopId) return;
+    let cancel = false;
+    fetchShopOrders(shopId).then((result) => {
+      if (cancel) return;
+      if (result.error) showError(result.error);
+      else setOrders(result.orders);
+    });
+    return () => {
+      cancel = true;
+    };
+  }, [tab, shopId]);
 
   function showError(message) {
     setError(message);
@@ -150,6 +200,8 @@ function AdminPanel() {
       return;
     }
     setError("");
+    setShopForm((current) => ({ ...current, stripeSecretKey: "" }));
+    if (shopForm.stripeSecretKey.trim()) setSecretSaved(true);
     notify("Dados da loja salvos.");
   }
 
@@ -171,6 +223,7 @@ function AdminPanel() {
         {[
           ["produtos", "Produtos"],
           ["categorias", "Categorias"],
+          ["pedidos", "Pedidos"],
           ["loja", "Loja"],
         ].map(([id, label]) => (
           <button key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? "on" : ""} onClick={() => changeTab(id)}>
@@ -280,6 +333,27 @@ function AdminPanel() {
         </div>
       ) : null}
 
+      {tab === "pedidos" ? (
+        <div className="admin-list">
+          <p className="hint">Pedidos pagos aparecem aqui e também vão para o Discord da loja.</p>
+          {orders.length === 0 ? <p className="empty-inline">Nenhum pedido ainda.</p> : null}
+          {orders.map((order) => (
+            <article key={order.id} className="admin-card">
+              <strong>
+                {order.status === "paid" ? "Pago" : order.status === "pending" ? "Aguardando pagamento" : "Cancelado"} · {money(Number(order.total))}
+              </strong>
+              <p className="muted">
+                {order.customer_name} · {order.customer_mode === "entrega" ? "Entrega" : "Retirada"}
+              </p>
+              {order.customer_mode === "entrega" && order.customer_address ? <p className="muted">{order.customer_address}</p> : null}
+              <p className="muted">
+                {(order.items || []).map((item) => `${item.qty}x ${item.name}`).join(" · ")}
+              </p>
+            </article>
+          ))}
+        </div>
+      ) : null}
+
       {tab === "loja" ? (
         <>
         <form className="form" onSubmit={submitShop}>
@@ -322,6 +396,51 @@ function AdminPanel() {
             />
             Aceitando pedidos agora
           </label>
+          <h3 className="admin-subtitle">Pagamento</h3>
+          <p className="hint">Cole as chaves da conta Stripe desta loja. A chave secreta não aparece de novo depois de salvar.</p>
+          <label>
+            Chave publicável
+            <input
+              autoComplete="off"
+              spellCheck="false"
+              placeholder="pk_test_..."
+              value={shopForm.stripePublishableKey}
+              onChange={(event) => setShopForm({ ...shopForm, stripePublishableKey: event.target.value })}
+            />
+          </label>
+          <label>
+            Chave secreta
+            <input
+              type="password"
+              autoComplete="new-password"
+              spellCheck="false"
+              placeholder={secretSaved ? "Salva. Cole outra só se for trocar." : "sk_test_..."}
+              value={shopForm.stripeSecretKey}
+              onChange={(event) => setShopForm({ ...shopForm, stripeSecretKey: event.target.value })}
+            />
+          </label>
+          <h3 className="admin-subtitle">Pedido pago</h3>
+          <p className="hint">Essa é a mensagem que o cliente vê depois que o pagamento confirma. Use **texto** para negrito.</p>
+          <label>
+            Título
+            <input
+              maxLength={80}
+              value={shopForm.paidTitle}
+              onChange={(event) => setShopForm({ ...shopForm, paidTitle: event.target.value })}
+            />
+          </label>
+          <label>
+            Mensagem
+            <textarea
+              rows={5}
+              maxLength={800}
+              value={shopForm.paidMessage}
+              onChange={(event) => setShopForm({ ...shopForm, paidMessage: event.target.value })}
+            />
+          </label>
+          <div className="empty paid-box paid-preview">
+            <PaidCopy title={shopForm.paidTitle || paidTitle} message={shopForm.paidMessage || paidMessage} />
+          </div>
           <button type="submit" className="primary">
             Salvar dados da loja
           </button>

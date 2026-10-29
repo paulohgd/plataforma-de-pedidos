@@ -1,4 +1,4 @@
-import { shop as defaultShop } from "./config";
+import { paidMessage, paidTitle, shop as defaultShop } from "./config";
 import { slugify } from "./format";
 import { seedCategories, seedProducts } from "./menu";
 import { supabase } from "./supabase";
@@ -9,8 +9,8 @@ export function explain(error) {
   if (/slug/i.test(message) && /column|schema cache/i.test(message)) {
     return "Falta atualizar a base. Rode o schema.sql de novo no Supabase.";
   }
-  if (code === "PGRST205" || code === "42P01" || /schema cache/i.test(message)) {
-    return "As tabelas da loja ainda não existem no Supabase.";
+  if (code === "PGRST205" || code === "42P01" || /schema cache/i.test(message) || /shop_secrets|paid_title|stripe_publishable/i.test(message)) {
+    return "Falta atualizar a base. Rode o schema.sql de novo no Supabase.";
   }
   if (code === "23503") return "Essa categoria ainda tem produtos vinculados.";
   if (/shops_slug_key|slug taken/i.test(message)) return "Já existe uma loja com esse endereço. Escolha outro nome.";
@@ -44,6 +44,9 @@ function toStore(shop, categories, products) {
       open: shop.is_open !== false,
       openLabel: shop.open_label || defaultShop.openLabel,
       closedLabel: shop.closed_label || defaultShop.closedLabel,
+      stripePublishableKey: shop.stripe_publishable_key || "",
+      paidTitle: shop.paid_title || paidTitle,
+      paidMessage: shop.paid_message || paidMessage,
     },
     categories: (categories || []).map((category) => ({ id: category.id, name: category.name })),
     products: (products || []).map((product) => ({
@@ -159,6 +162,28 @@ export async function deleteMyAccount(userId) {
   return error ? explain(error) : "";
 }
 
+export async function fetchShopSecretStatus(shopId) {
+  const { data, error } = await supabase
+    .from("shop_secrets")
+    .select("shop_id")
+    .eq("shop_id", shopId)
+    .neq("stripe_secret_key", "")
+    .maybeSingle();
+  if (error) return { error: explain(error), configured: false };
+  return { error: "", configured: Boolean(data) };
+}
+
+export async function saveShopSecret(shopId, secretKey) {
+  const key = String(secretKey || "").trim();
+  if (!key) return "";
+  if (!/^sk_(test|live)_/.test(key)) return "A chave secreta da Stripe deve começar com sk_test_ ou sk_live_.";
+  const { error } = await supabase.from("shop_secrets").upsert(
+    { shop_id: shopId, stripe_secret_key: key, updated_at: new Date().toISOString() },
+    { onConflict: "shop_id" },
+  );
+  return error ? explain(error) : "";
+}
+
 export async function saveShopRow(shopId, shop) {
   const fields = {
     name: shop.name,
@@ -168,6 +193,9 @@ export async function saveShopRow(shopId, shop) {
     is_open: shop.open,
     open_label: shop.openLabel,
     closed_label: shop.closedLabel,
+    stripe_publishable_key: shop.stripePublishableKey || "",
+    paid_title: shop.paidTitle || paidTitle,
+    paid_message: shop.paidMessage || paidMessage,
   };
   let { error } = await supabase.from("shops").update({ ...fields, slug: shop.slug }).eq("id", shopId);
   if (error && missingSlugColumn(error)) {
@@ -227,6 +255,17 @@ function dataUrlToBlob(dataUrl) {
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
   return new Blob([bytes], { type: mime });
+}
+
+export async function fetchShopOrders(shopId) {
+  const { data, error } = await supabase
+    .from("orders")
+    .select("id, status, customer_name, customer_mode, customer_address, customer_notes, items, total, paid_at, created_at")
+    .eq("shop_id", shopId)
+    .order("created_at", { ascending: false })
+    .limit(50);
+  if (error) return { error: explain(error), orders: [] };
+  return { error: "", orders: data || [] };
 }
 
 export async function uploadProductImage(userId, productId, dataUrl) {

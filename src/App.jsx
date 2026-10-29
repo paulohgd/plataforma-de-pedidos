@@ -6,6 +6,7 @@ import Stores from "./screens/Stores";
 import Product from "./screens/Product";
 import Bag from "./screens/Bag";
 import Checkout from "./screens/Checkout";
+import Paid from "./screens/Paid";
 import Search from "./screens/Search";
 import Access from "./screens/Access";
 import Admin from "./screens/Admin";
@@ -20,6 +21,7 @@ function Shell() {
       {route.name === "product" && <Product key={`${route.id}-${route.lineId || "new"}`} />}
       {route.name === "bag" && <Bag />}
       {route.name === "checkout" && <Checkout />}
+      {route.name === "paid" && <Paid />}
       {route.name === "search" && <Search />}
       {route.name === "access" && <Access />}
       {route.name === "admin" && <Admin />}
