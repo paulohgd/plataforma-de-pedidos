@@ -1039,18 +1039,26 @@ h1, h2, h3 { line-height: 1.2; }
   top: 56px;
   z-index: 9;
   display: flex;
+  flex-wrap: wrap;
   background: var(--header);
   border-bottom: 1px solid var(--line);
 }
 
 .admin-tabs button {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 5.5em;
   border: 0;
   background: transparent;
   padding: 12px 8px;
   font-weight: 700;
-  font-size: 14px;
+  font-size: 13px;
   color: var(--muted);
+}
+
+.admin-tabs.order-filters {
+  position: static;
+  border: 1px solid var(--line);
+  border-radius: 10px;
 }
 
 .admin-tabs button.on {
@@ -1139,6 +1147,23 @@ h1, h2, h3 { line-height: 1.2; }
 
 .featured-pick select {
   width: 100%;
+}
+
+.type-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.type-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 5.2em 3.6em auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.type-option input {
+  min-width: 0;
 }
 
 .ghost {

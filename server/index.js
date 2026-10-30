@@ -74,9 +74,10 @@ async function loadShop(slug) {
   const { data: shop, error } = await supabase.from("shops").select("*").eq("slug", slug).maybeSingle();
   if (error) throw new Error(error.message);
   if (!shop) return null;
-  const [{ data: categories }, { data: products }] = await Promise.all([
+  const [{ data: categories }, { data: products }, { data: itemTypes }] = await Promise.all([
     supabase.from("categories").select("*").eq("shop_id", shop.id),
     supabase.from("products").select("*").eq("shop_id", shop.id),
+    supabase.from("item_types").select("*").eq("shop_id", shop.id).order("position"),
   ]);
   return {
     shopId: shop.id,
@@ -98,6 +99,11 @@ async function loadShop(slug) {
       price: Number(product.price),
       image: product.image || "",
       featured: Boolean(product.featured),
+    })),
+    itemTypes: (itemTypes || []).map((type) => ({
+      id: type.id,
+      name: type.name,
+      groups: type.groups || [],
     })),
     categories: categories || [],
   };

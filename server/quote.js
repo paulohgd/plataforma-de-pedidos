@@ -1,7 +1,7 @@
 import { hydrateProducts } from "../src/menu.js";
 
 export function quoteCart(store, payload) {
-  const products = hydrateProducts(store.products || []);
+  const products = hydrateProducts(store.products || [], store.itemTypes);
   const byId = new Map(products.map((product) => [product.id, product]));
   const lines = [];
 

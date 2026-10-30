@@ -2,7 +2,7 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState, createCo
 import { authRedirectTo, clearAuthCallbackUrl, readAuthCallbackError } from "./authCallback";
 import { paidMessage, paidTitle, shop as defaultShop } from "./config";
 import { norm, slugify } from "./format";
-import { hydrateProducts, orderFeatured } from "./menu";
+import { cloneItemType, hydrateProducts, orderFeatured, seedItemTypes } from "./menu";
 import { readPlace, readRoute, singleShopRedirect } from "./place";
 import {
   createSeedShop,
@@ -13,17 +13,19 @@ import {
   fetchShops,
   fetchStoreByOwner,
   fetchStoreBySlug,
+  deleteItemType,
   insertCategory,
+  saveCategoryOrder,
   saveFeaturedProducts,
   saveShopRow,
   saveShopSecrets,
   updateCategoryName,
   uploadProductImage,
+  upsertItemType,
   upsertProduct,
 } from "./remote";
 import { supabase } from "./supabase";
 
-const KINDS = new Set(["beef", "chicken", "sandwich", "fries", "simple"]);
 const CatalogContext = createContext(null);
 
 function blankStore() {
@@ -45,6 +47,7 @@ function blankStore() {
     },
     categories: [],
     products: [],
+    itemTypes: seedItemTypes.map(cloneItemType),
   };
 }
 
@@ -70,7 +73,7 @@ function cleanProduct(product) {
   return {
     id: product.id ? String(product.id) : "",
     category: String(product.category || ""),
-    kind: KINDS.has(product.kind) ? product.kind : "simple",
+    kind: String(product.kind || "simple").trim() || "simple",
     name: String(product.name).trim().slice(0, 80),
     description: String(product.description || "").trim().slice(0, 400),
     price: Math.round(Number(product.price) * 100) / 100,
@@ -120,7 +123,10 @@ export function CatalogProvider({ children }) {
 
   const isOwner = Boolean(account && store.ownerId === account.id);
   const hasOwner = Boolean(mine?.shopId);
-  const products = useMemo(() => hydrateProducts(store.products), [store.products]);
+  const products = useMemo(
+    () => hydrateProducts(store.products, store.itemTypes),
+    [store.products, store.itemTypes],
+  );
   const featured = useMemo(() => orderFeatured(products), [products]);
 
   function commitStore(next) {
@@ -473,6 +479,74 @@ export function CatalogProvider({ children }) {
     [deny, store.products, store.shopId],
   );
 
+  const setCategoryOrder = useCallback(
+    async (ids) => {
+      const denied = deny();
+      if (denied) return denied;
+      const allowed = new Set(store.categories.map((category) => category.id));
+      const order = ids.filter((id) => allowed.has(id));
+      if (order.length !== store.categories.length) return "Não foi possível reordenar as categorias.";
+      const error = await saveCategoryOrder(store.shopId, order);
+      if (error) return error;
+      const ranked = new Map(order.map((id, index) => [id, index]));
+      setStore((current) => ({
+        ...current,
+        categories: current.categories
+          .slice()
+          .sort((a, b) => (ranked.get(a.id) ?? 0) - (ranked.get(b.id) ?? 0)),
+      }));
+      return "";
+    },
+    [deny, store.categories, store.shopId],
+  );
+
+  const saveItemType = useCallback(
+    async (input) => {
+      const denied = deny();
+      if (denied) return denied;
+      const name = String(input.name || "").trim().slice(0, 80);
+      if (name.length < 2) return "Informe o nome do tipo.";
+      const type = cloneItemType({
+        id: input.id || uniqueId(name, new Set(store.itemTypes.map((item) => item.id))),
+        name,
+        groups: input.groups || [],
+      });
+      if (store.itemTypes.some((item) => item.id !== type.id && norm(item.name) === norm(name))) {
+        return "Já existe um tipo com esse nome.";
+      }
+      const index = store.itemTypes.findIndex((item) => item.id === type.id);
+      const nextTypes =
+        index === -1
+          ? [...store.itemTypes, type]
+          : store.itemTypes.map((item) => (item.id === type.id ? type : item));
+      const results = await Promise.all(nextTypes.map((item, position) => upsertItemType(store.shopId, item, position)));
+      const error = results.find(Boolean);
+      if (error) return error;
+      setStore((current) => ({ ...current, itemTypes: nextTypes }));
+      return "";
+    },
+    [deny, store.itemTypes, store.shopId],
+  );
+
+  const removeItemType = useCallback(
+    async (id) => {
+      const denied = deny();
+      if (denied) return denied;
+      if (store.itemTypes.length < 2) return "Deixe pelo menos um tipo de item.";
+      const count = store.products.filter((product) => product.kind === id).length;
+      if (count === 1) return "Esse tipo tem 1 produto. Mude o tipo do produto antes de apagá-lo.";
+      if (count > 1) return `Esse tipo tem ${count} produtos. Mude o tipo desses produtos antes de apagá-lo.`;
+      const error = await deleteItemType(store.shopId, id);
+      if (error) return error;
+      setStore((current) => ({
+        ...current,
+        itemTypes: current.itemTypes.filter((item) => item.id !== id),
+      }));
+      return "";
+    },
+    [deny, store.itemTypes, store.products, store.shopId],
+  );
+
   const saveProduct = useCallback(
     async (input) => {
       const denied = deny();
@@ -480,6 +554,7 @@ export function CatalogProvider({ children }) {
       const name = String(input.name || "").trim();
       if (name.length < 2) return "Informe o nome do produto.";
       if (!store.categories.some((category) => category.id === input.category)) return "Escolha uma categoria cadastrada.";
+      if (!store.itemTypes.some((type) => type.id === input.kind)) return "Escolha um tipo de item cadastrado.";
       const price = Number(input.price);
       if (!Number.isFinite(price) || price < 0 || price > 9999) return "Informe um preço válido.";
       let image = String(input.image || "").trim();
@@ -586,9 +661,13 @@ export function CatalogProvider({ children }) {
     resendConfirmation,
     logout,
     updateShop,
+    itemTypes: store.itemTypes,
     addCategory,
     renameCategory,
     removeCategory,
+    setCategoryOrder,
+    saveItemType,
+    removeItemType,
     saveProduct,
     setFeaturedOrder,
     removeProduct,

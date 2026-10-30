@@ -59,6 +59,58 @@ const extras = [
   { id: "ovo", name: "Ovo", price: 4, max: 1 },
 ];
 
+const extrasBurger = {
+  id: "adicionais",
+  name: "Adicionais",
+  min: 0,
+  max: 8,
+  items: [{ id: "burger-extra", name: "Burger 160g", price: 18, max: 2 }, ...extras],
+};
+
+const extrasChicken = {
+  id: "adicionais",
+  name: "Adicionais",
+  min: 0,
+  max: 8,
+  items: [{ id: "frango-extra", name: "Frango empanado", price: 14, max: 1 }, ...extras],
+};
+
+const extrasSandwich = {
+  id: "adicionais",
+  name: "Adicionais",
+  min: 0,
+  max: 8,
+  items: extras,
+};
+
+const porcao = {
+  id: "porcao",
+  name: "Aceita uma porçãozinha?",
+  min: 0,
+  max: 4,
+  source: "sides",
+  items: [],
+};
+
+const bebida = {
+  id: "bebida",
+  name: "Vai uma bebidinha?",
+  min: 0,
+  max: 5,
+  source: "drinks",
+  items: [],
+};
+
+export const optionTemplates = [ponto, extrasBurger, extrasChicken, extrasSandwich, molho, porcao, bebida];
+
+export const seedItemTypes = [
+  { id: "beef", name: "Hambúrguer — ponto, adicionais, porção e bebida", groups: [ponto, extrasBurger, porcao, bebida] },
+  { id: "chicken", name: "Frango — adicionais, porção e bebida", groups: [extrasChicken, porcao, bebida] },
+  { id: "sandwich", name: "Sanduíche — adicionais, porção e bebida", groups: [extrasSandwich, porcao, bebida] },
+  { id: "fries", name: "Porção — o cliente escolhe o molho", groups: [molho] },
+  { id: "simple", name: "Simples — só observação", groups: [] },
+];
+
 export const seedCategories = [
   { id: "entradas", name: "Entradas" },
   { id: "burgers", name: "Burgers e sanduíches" },
@@ -311,8 +363,36 @@ export function orderFeatured(list) {
 const sideIds = ["batata-frita", "batata-cheddar", "aneis", "frango-crocante"];
 const drinkIds = ["coca-cola", "guarana", "limonada", "agua"];
 
-export function hydrateProducts(list) {
+function cloneGroup(group) {
+  return {
+    id: String(group.id || ""),
+    name: String(group.name || ""),
+    min: Math.max(0, Number(group.min) || 0),
+    max: Math.max(0, Number(group.max) || 0),
+    source: group.source === "sides" || group.source === "drinks" ? group.source : "list",
+    items: Array.isArray(group.items)
+      ? group.items.map((item) => ({
+          id: String(item.id || ""),
+          name: String(item.name || ""),
+          price: Number(item.price) || 0,
+          max: Math.max(1, Number(item.max) || 1),
+        }))
+      : [],
+  };
+}
+
+export function cloneItemType(type) {
+  return {
+    id: String(type.id || ""),
+    name: String(type.name || ""),
+    groups: Array.isArray(type.groups) ? type.groups.map(cloneGroup) : [],
+  };
+}
+
+export function hydrateProducts(list, types = seedItemTypes) {
   const byId = new Map(list.map((product) => [product.id, product]));
+  const catalog = (types && types.length ? types : seedItemTypes).map(cloneItemType);
+  const byKind = new Map(catalog.map((type) => [type.id, type]));
 
   function optionFrom(id, max) {
     const product = byId.get(id);
@@ -326,69 +406,29 @@ export function hydrateProducts(list) {
     };
   }
 
-  const sideItems = sideIds.map((id) => optionFrom(id, 2)).filter(Boolean);
-  const drinkItems = drinkIds.map((id) => optionFrom(id, 3)).filter(Boolean);
-  const sides = sideItems.length
-    ? {
-        id: "porcao",
-        name: "Aceita uma porçãozinha?",
-        label: "Porção",
-        min: 0,
-        max: 4,
-        items: sideItems,
+  function resolveGroup(group) {
+    const next = cloneGroup(group);
+    if (next.source === "sides") {
+      next.items = sideIds.map((id) => optionFrom(id, 2)).filter(Boolean);
+      if (!next.items.length) {
+        next.items = list.filter((product) => product.kind === "fries").map((product) => optionFrom(product.id, 2)).filter(Boolean);
       }
-    : null;
-  const drinks = drinkItems.length
-    ? {
-        id: "bebida",
-        name: "Vai uma bebidinha?",
-        label: "Bebida",
-        min: 0,
-        max: 5,
-        items: drinkItems,
+    } else if (next.source === "drinks") {
+      next.items = drinkIds.map((id) => optionFrom(id, 3)).filter(Boolean);
+      if (!next.items.length) {
+        next.items = list
+          .filter((product) => product.category === "bebidas" && product.kind === "simple")
+          .map((product) => optionFrom(product.id, 3))
+          .filter(Boolean);
       }
-    : null;
-
-  function meal(groups) {
-    return [...groups, sides, drinks].filter(Boolean);
+    }
+    if (!next.items.length && next.min === 0 && (next.source === "sides" || next.source === "drinks")) return null;
+    return next;
   }
 
   return list.map((product) => {
-    let groups = [];
-    if (product.kind === "beef") {
-      groups = meal([
-        ponto,
-        {
-          id: "adicionais",
-          name: "Adicionais",
-          min: 0,
-          max: 8,
-          items: [{ id: "burger-extra", name: "Burger 160g", price: 18, max: 2 }, ...extras],
-        },
-      ]);
-    } else if (product.kind === "chicken") {
-      groups = meal([
-        {
-          id: "adicionais",
-          name: "Adicionais",
-          min: 0,
-          max: 8,
-          items: [{ id: "frango-extra", name: "Frango empanado", price: 14, max: 1 }, ...extras],
-        },
-      ]);
-    } else if (product.kind === "sandwich") {
-      groups = meal([
-        {
-          id: "adicionais",
-          name: "Adicionais",
-          min: 0,
-          max: 8,
-          items: extras,
-        },
-      ]);
-    } else if (product.kind === "fries") {
-      groups = [molho];
-    }
+    const type = byKind.get(product.kind) || byKind.get("simple") || catalog[0];
+    const groups = (type?.groups || []).map(resolveGroup).filter(Boolean);
     return { ...product, groups };
   });
 }

@@ -3,6 +3,7 @@ export function readRoute(path = window.location.pathname) {
   if (editor) return { name: "product-form", id: decodeURIComponent(editor[1]), slug: null, lineId: null };
   if (path.startsWith("/painel/produto")) return { name: "product-form", id: null, slug: null, lineId: null };
   if (path.startsWith("/painel/categorias")) return { name: "admin", tab: "categorias", slug: null };
+  if (path.startsWith("/painel/tipos")) return { name: "admin", tab: "tipos", slug: null };
   if (path.startsWith("/painel/loja")) return { name: "admin", tab: "loja", slug: null };
   if (path.startsWith("/painel/pedidos")) return { name: "admin", tab: "pedidos", slug: null };
   if (path.startsWith("/painel")) return { name: "admin", tab: "produtos", slug: null };

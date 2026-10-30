@@ -99,9 +99,10 @@ create table if not exists public.products (
   position integer not null default 0,
   primary key (shop_id, id),
   foreign key (shop_id, category_id) references public.categories (shop_id, id) on update cascade on delete restrict,
-  constraint products_kind check (kind in ('beef', 'chicken', 'sandwich', 'fries', 'simple')),
   constraint products_price check (price >= 0 and price <= 9999)
 );
+
+alter table public.products drop constraint if exists products_kind;
 
 alter table public.products add column if not exists featured_rank integer not null default 0;
 
@@ -366,5 +367,58 @@ create policy orders_select on public.orders
     exists (
       select 1 from public.shops
       where shops.id = orders.shop_id and shops.owner_id = auth.uid()
+    )
+  );
+
+grant update on public.orders to authenticated;
+
+drop policy if exists orders_update on public.orders;
+create policy orders_update on public.orders
+  for update to authenticated
+  using (
+    exists (
+      select 1 from public.shops
+      where shops.id = orders.shop_id and shops.owner_id = auth.uid()
+    )
+  )
+  with check (
+    exists (
+      select 1 from public.shops
+      where shops.id = orders.shop_id and shops.owner_id = auth.uid()
+    )
+  );
+
+create table if not exists public.item_types (
+  shop_id uuid not null references public.shops (id) on delete cascade,
+  id text not null,
+  name text not null,
+  groups jsonb not null default '[]'::jsonb,
+  position integer not null default 0,
+  primary key (shop_id, id)
+);
+
+alter table public.item_types enable row level security;
+grant select on public.item_types to anon, authenticated;
+grant insert, update, delete on public.item_types to authenticated;
+
+drop policy if exists item_types_select on public.item_types;
+drop policy if exists item_types_write on public.item_types;
+
+create policy item_types_select on public.item_types
+  for select to anon, authenticated
+  using (true);
+
+create policy item_types_write on public.item_types
+  for all to authenticated
+  using (
+    exists (
+      select 1 from public.shops
+      where shops.id = item_types.shop_id and shops.owner_id = auth.uid()
+    )
+  )
+  with check (
+    exists (
+      select 1 from public.shops
+      where shops.id = item_types.shop_id and shops.owner_id = auth.uid()
     )
   );

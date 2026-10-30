@@ -5,14 +5,6 @@ import { useUI } from "../router";
 import { PageHead, Thumb } from "../ui";
 import RequireOwner from "./RequireOwner";
 
-const KINDS = [
-  ["beef", "Hambúrguer — ponto, adicionais, porção e bebida"],
-  ["chicken", "Frango — adicionais, porção e bebida"],
-  ["sandwich", "Sanduíche — adicionais, porção e bebida"],
-  ["fries", "Porção — o cliente escolhe o molho"],
-  ["simple", "Simples — só observação"],
-];
-
 function parsePrice(value) {
   const text = String(value).trim().replace(/\s/g, "").replace(/^R\$/i, "");
   if (!text) return null;
@@ -27,7 +19,7 @@ function formatPrice(value) {
 }
 
 function ProductEditor() {
-  const { categories, getProduct, saveProduct } = useCatalog();
+  const { categories, itemTypes, getProduct, saveProduct } = useCatalog();
   const { route, openAdmin, notify } = useUI();
   const existing = route.id ? getProduct(route.id) : null;
   const fileRef = useRef(null);
@@ -35,7 +27,9 @@ function ProductEditor() {
   const [description, setDescription] = useState(existing?.description || "");
   const [price, setPrice] = useState(existing ? formatPrice(existing.price) : "");
   const [category, setCategory] = useState(categories.some((item) => item.id === existing?.category) ? existing.category : "");
-  const [kind, setKind] = useState(existing?.kind || "simple");
+  const [kind, setKind] = useState(
+    itemTypes.some((type) => type.id === existing?.kind) ? existing.kind : itemTypes[0]?.id || "simple",
+  );
   const [featured, setFeatured] = useState(Boolean(existing?.featured));
   const [image, setImage] = useState(existing?.image || "");
   const [error, setError] = useState("");
@@ -172,13 +166,14 @@ function ProductEditor() {
         <label>
           Tipo do item
           <select value={kind} onChange={(event) => setKind(event.target.value)}>
-            {KINDS.map(([id, label]) => (
-              <option key={id} value={id}>
-                {label}
+            {itemTypes.map((type) => (
+              <option key={type.id} value={type.id}>
+                {type.name}
               </option>
             ))}
           </select>
         </label>
+        <p className="hint">Os tipos e as opções extras são cadastrados na aba Tipo do item.</p>
         <label className="check">
           <input type="checkbox" checked={featured} onChange={(event) => setFeatured(event.target.checked)} />
           Mostrar nos destaques

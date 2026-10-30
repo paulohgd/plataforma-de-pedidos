@@ -6,9 +6,29 @@ import { PaidCopy } from "../PaidCopy";
 import { fetchShopOrders, fetchShopSecretStatus } from "../remote";
 import { useUI } from "../router";
 import { PageHead, Thumb } from "../ui";
+import ItemTypesPanel from "./ItemTypesPanel";
 import RequireOwner from "./RequireOwner";
 
-function CategoryRow({ category, count, onRename, onRemove }) {
+const ORDER_FILTERS = [
+  ["paid", "Pagos"],
+  ["pending", "Aguardando pagamento"],
+  ["canceled", "Cancelado"],
+];
+
+function displayOrderStatus(order) {
+  if (order.status === "paid") return "paid";
+  if (order.status === "canceled") return "canceled";
+  if (new Date(order.created_at).getTime() < Date.now() - 60 * 60 * 1000) return "canceled";
+  return "pending";
+}
+
+function orderStatusLabel(status) {
+  if (status === "paid") return "Pago";
+  if (status === "pending") return "Aguardando pagamento";
+  return "Cancelado";
+}
+
+function CategoryRow({ category, count, index, total, onRename, onRemove, onMove }) {
   const [name, setName] = useState(category.name);
   const [confirming, setConfirming] = useState(false);
 
@@ -46,6 +66,14 @@ function CategoryRow({ category, count, onRename, onRemove }) {
       <p className="muted">
         {count === 1 ? "1 produto vinculado" : `${count} produtos vinculados`}
       </p>
+      <div className="featured-actions">
+        <button type="button" className="text-btn" disabled={index === 0} onClick={() => onMove(index, -1)}>
+          Subir
+        </button>
+        <button type="button" className="text-btn" disabled={index === total - 1} onClick={() => onMove(index, 1)}>
+          Descer
+        </button>
+      </div>
       {confirming ? (
         <div className="confirm-row">
           <span>Remover {category.name}?</span>
@@ -210,12 +238,32 @@ function ProductRow({ product, categoryName, onEdit, onRemove }) {
 }
 
 function AdminPanel() {
-  const { shop, shopId, categories, products, featured, account, logout, updateShop, addCategory, renameCategory, removeCategory, removeProduct, removeAccount, setFeaturedOrder } = useCatalog();
+  const {
+    shop,
+    shopId,
+    categories,
+    products,
+    featured,
+    itemTypes,
+    account,
+    logout,
+    updateShop,
+    addCategory,
+    renameCategory,
+    removeCategory,
+    setCategoryOrder,
+    saveItemType,
+    removeItemType,
+    removeProduct,
+    removeAccount,
+    setFeaturedOrder,
+  } = useCatalog();
   const { route, goHome, openAdmin, openProductForm, notify } = useUI();
   const [tab, setTab] = useState(route.tab || "produtos");
   const [error, setError] = useState("");
   const [orders, setOrders] = useState([]);
   const [categoryName, setCategoryName] = useState("");
+  const [orderFilter, setOrderFilter] = useState("paid");
   const [confirmAccount, setConfirmAccount] = useState(false);
   const [secretsSaved, setSecretsSaved] = useState({ stripe: false, discord: false });
   const [shopForm, setShopForm] = useState({
@@ -336,6 +384,7 @@ function AdminPanel() {
         {[
           ["produtos", "Produtos"],
           ["categorias", "Categorias"],
+          ["tipos", "Tipo do item"],
           ["pedidos", "Pedidos"],
           ["loja", "Loja"],
         ].map(([id, label]) => (
@@ -422,10 +471,12 @@ function AdminPanel() {
             <p className="hint">Essas categorias aparecem no cadastro do produto para você vincular o item.</p>
           </form>
           {categories.length === 0 ? <p className="empty-inline">Nenhuma categoria cadastrada.</p> : null}
-          {categories.map((category) => (
+          {categories.map((category, index) => (
             <CategoryRow
               key={category.id}
               category={category}
+              index={index}
+              total={categories.length}
               count={products.filter((product) => product.category === category.id).length}
               onRename={async (id, name) => {
                 const message = await renameCategory(id, name);
@@ -441,19 +492,60 @@ function AdminPanel() {
                   notify("Categoria removida.");
                 }
               }}
+              onMove={async (from, step) => {
+                const next = categories.map((item) => item.id);
+                const to = from + step;
+                if (to < 0 || to >= next.length) return;
+                [next[from], next[to]] = [next[to], next[from]];
+                const message = await setCategoryOrder(next);
+                if (message) showError(message);
+                else setError("");
+              }}
             />
           ))}
         </div>
       ) : null}
 
+      {tab === "tipos" ? (
+        <ItemTypesPanel
+          types={itemTypes}
+          products={products}
+          onSave={saveItemType}
+          onRemove={removeItemType}
+          onError={showError}
+          notify={(text) => {
+            setError("");
+            notify(text);
+          }}
+        />
+      ) : null}
+
       {tab === "pedidos" ? (
         <div className="admin-list">
-          <p className="hint">Pedidos pagos aparecem aqui e também vão para o Discord da loja.</p>
-          {orders.length === 0 ? <p className="empty-inline">Nenhum pedido ainda.</p> : null}
-          {orders.map((order) => (
+          <p className="hint">Pedidos pagos também vão para o Discord da loja. Sem pagamento em 1 hora, o pedido entra em Cancelado.</p>
+          <div className="admin-tabs order-filters" role="tablist" aria-label="Filtro de pedidos">
+            {ORDER_FILTERS.map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={orderFilter === id}
+                className={orderFilter === id ? "on" : ""}
+                onClick={() => setOrderFilter(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {orders.filter((order) => displayOrderStatus(order) === orderFilter).length === 0 ? (
+            <p className="empty-inline">Nenhum pedido neste filtro.</p>
+          ) : null}
+          {orders
+            .filter((order) => displayOrderStatus(order) === orderFilter)
+            .map((order) => (
             <article key={order.id} className="admin-card">
               <strong>
-                {order.status === "paid" ? "Pago" : order.status === "pending" ? "Aguardando pagamento" : "Cancelado"} · {money(Number(order.total))}
+                {orderStatusLabel(displayOrderStatus(order))} · {money(Number(order.total))}
               </strong>
               <p className="muted">
                 {order.customer_name} · {order.customer_mode === "entrega" ? "Entrega" : "Retirada"}

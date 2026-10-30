@@ -1,6 +1,6 @@
 import { paidMessage, paidTitle, shop as defaultShop } from "./config";
 import { slugify } from "./format";
-import { seedCategories, seedProducts } from "./menu";
+import { cloneItemType, seedCategories, seedItemTypes, seedProducts } from "./menu";
 import { supabase } from "./supabase";
 
 export function explain(error) {
@@ -9,7 +9,7 @@ export function explain(error) {
   if (/slug/i.test(message) && /column|schema cache/i.test(message)) {
     return "Falta atualizar a base. Rode o schema.sql de novo no Supabase.";
   }
-  if (code === "PGRST205" || code === "42P01" || /schema cache/i.test(message) || /shop_secrets|paid_title|stripe_publishable/i.test(message)) {
+  if (code === "PGRST205" || code === "42P01" || /schema cache/i.test(message) || /shop_secrets|paid_title|stripe_publishable|item_types/i.test(message)) {
     return "Falta atualizar a base. Rode o schema.sql de novo no Supabase.";
   }
   if (code === "23503") return "Essa categoria ainda tem produtos vinculados.";
@@ -34,7 +34,18 @@ export function explainAuth(error) {
   return "Não foi possível acessar agora.";
 }
 
-function toStore(shop, categories, products) {
+function toItemTypes(rows) {
+  if (!rows?.length) return seedItemTypes.map(cloneItemType);
+  return rows.map((row) =>
+    cloneItemType({
+      id: row.id,
+      name: row.name,
+      groups: row.groups,
+    }),
+  );
+}
+
+function toStore(shop, categories, products, itemTypes) {
   return {
     shopId: shop.id,
     ownerId: shop.owner_id,
@@ -63,6 +74,7 @@ function toStore(shop, categories, products) {
       featured: Boolean(product.featured),
       featuredRank: Number(product.featured_rank) || 0,
     })),
+    itemTypes: toItemTypes(itemTypes),
   };
 }
 
@@ -80,16 +92,28 @@ function toSummary(shop) {
   };
 }
 
+function missingItemTypes(error) {
+  const message = error?.message || "";
+  return /item_types/i.test(message) && /relation|schema cache|does not exist/i.test(message);
+}
+
 async function loadShop(shop) {
   if (!shop) return { error: "", store: null };
 
-  const [categoriesResult, productsResult] = await Promise.all([
+  const [categoriesResult, productsResult, typesResult] = await Promise.all([
     supabase.from("categories").select("*").eq("shop_id", shop.id).order("position"),
     supabase.from("products").select("*").eq("shop_id", shop.id).order("position"),
+    supabase.from("item_types").select("*").eq("shop_id", shop.id).order("position"),
   ]);
   if (categoriesResult.error) return { error: explain(categoriesResult.error), store: null };
   if (productsResult.error) return { error: explain(productsResult.error), store: null };
-  return { error: "", store: toStore(shop, categoriesResult.data, productsResult.data) };
+  if (typesResult.error && !missingItemTypes(typesResult.error)) {
+    return { error: explain(typesResult.error), store: null };
+  }
+  return {
+    error: "",
+    store: toStore(shop, categoriesResult.data, productsResult.data, typesResult.error ? [] : typesResult.data),
+  };
 }
 
 export async function fetchShops() {
@@ -176,7 +200,11 @@ export async function createSeedShop(name) {
     if (current.data?.user?.id) return fetchStoreByOwner(current.data.user.id);
   }
   if (error) return { error: explain(error), store: null };
-  return fetchStoreBySlug(shop.slug);
+  const created = await fetchStoreBySlug(shop.slug);
+  if (created.store?.shopId) {
+    await Promise.all(seedItemTypes.map((type, position) => upsertItemType(created.store.shopId, type, position)));
+  }
+  return created;
 }
 
 function alreadyHasShop(error) {
@@ -258,6 +286,16 @@ export async function saveShopRow(shopId, shop) {
     ({ error } = await supabase.from("shops").update(fields).eq("id", shopId));
   }
   return error ? explain(error) : "";
+}
+
+export async function saveCategoryOrder(shopId, ids) {
+  const results = await Promise.all(
+    ids.map((id, position) =>
+      supabase.from("categories").update({ position }).eq("shop_id", shopId).eq("id", id),
+    ),
+  );
+  const fail = results.find((result) => result.error);
+  return fail?.error ? explain(fail.error) : "";
 }
 
 export async function insertCategory(shopId, category, position) {
@@ -344,14 +382,46 @@ function dataUrlToBlob(dataUrl) {
 }
 
 export async function fetchShopOrders(shopId) {
+  const cutoff = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  await supabase
+    .from("orders")
+    .update({ status: "canceled" })
+    .eq("shop_id", shopId)
+    .eq("status", "pending")
+    .lt("created_at", cutoff);
   const { data, error } = await supabase
     .from("orders")
     .select("id, status, customer_name, customer_mode, customer_address, customer_notes, items, total, paid_at, created_at")
     .eq("shop_id", shopId)
     .order("created_at", { ascending: false })
-    .limit(50);
+    .limit(80);
   if (error) return { error: explain(error), orders: [] };
-  return { error: "", orders: data || [] };
+  const orders = (data || []).map((order) => {
+    if (order.status === "pending" && new Date(order.created_at).getTime() < Date.now() - 60 * 60 * 1000) {
+      return { ...order, status: "canceled" };
+    }
+    return order;
+  });
+  return { error: "", orders };
+}
+
+export async function upsertItemType(shopId, type, position) {
+  const { error } = await supabase.from("item_types").upsert(
+    {
+      shop_id: shopId,
+      id: type.id,
+      name: type.name,
+      groups: type.groups || [],
+      position,
+    },
+    { onConflict: "shop_id,id" },
+  );
+  return error ? explain(error) : "";
+}
+
+export async function deleteItemType(shopId, id) {
+  const { error } = await supabase.from("item_types").delete().eq("shop_id", shopId).eq("id", id);
+  return error ? explain(error) : "";
 }
 
 export async function uploadProductImage(userId, productId, dataUrl) {
