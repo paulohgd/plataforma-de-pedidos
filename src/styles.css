@@ -845,12 +845,69 @@ h1, h2, h3 { line-height: 1.2; }
 }
 
 .stripe-box {
-  min-height: 420px;
+  min-height: 280px;
   margin-top: 8px;
+}
+
+.gpay-box {
+  min-height: 48px;
+  margin-bottom: 8px;
+}
+
+.gpay-box.gpay-pending {
+  min-height: 1px;
+  margin-bottom: 0;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
 }
 
 .stripe-box[hidden] {
   display: none;
+}
+
+.pay-tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.pay-tabs .choice {
+  flex: 1;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  justify-content: center;
+}
+
+.pay-tabs .choice.on {
+  border-color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--text);
+}
+
+.pix-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--card);
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.pix-copy textarea {
+  min-height: 96px;
+  resize: none;
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.pix-timer {
+  margin: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.pix-timer.ending {
+  color: #b42318;
 }
 
 .form {

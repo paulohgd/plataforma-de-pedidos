@@ -6,8 +6,8 @@ import { useUI } from "../router";
 import { BottomNav, IconMenu, IconMoon, IconSearch, IconShare, IconSun, ItemLink, Thumb } from "../ui";
 
 export default function Home() {
-  const { shop, categories, featured, productsIn, account, ready, missing, remoteError, retryStore } = useCatalog();
-  const { route, openProduct, openSearch, openBag, openAccess, openAdmin, openDirectory, share, toggleTheme, theme } = useUI();
+  const { shop, categories, featured, productsIn, ready, missing, remoteError, retryStore } = useCatalog();
+  const { route, openProduct, openSearch, openBag, openDirectory, share, toggleTheme, theme } = useUI();
   const { count, total } = useCart();
   const [active, setActive] = useState(categories[0]?.id || "");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -219,17 +219,6 @@ export default function Home() {
               <br />
               Monte o lanche, escolha os adicionais e envie a comanda no WhatsApp. O pagamento é combinado na conversa.
             </p>
-            <button
-              type="button"
-              className="sheet-link"
-              onClick={() => {
-                setInfoOpen(false);
-                if (account) openAdmin();
-                else openAccess();
-              }}
-            >
-              Configurar a loja
-            </button>
             <button type="button" className="primary sheet-close" onClick={() => setInfoOpen(false)}>
               Fechar
             </button>

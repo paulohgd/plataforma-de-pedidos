@@ -162,6 +162,24 @@ export function CatalogProvider({ children }) {
     const current = ++ticket.current;
     const user = accountRef.current;
     const place = readPlace();
+
+    if (
+      user &&
+      (place.scope === "admin" || place.scope === "access") &&
+      storeRef.current.shopId &&
+      storeRef.current.ownerId === user.id
+    ) {
+      setMine({
+        shopId: storeRef.current.shopId,
+        ownerId: storeRef.current.ownerId,
+        slug: storeRef.current.shop.slug,
+      });
+      setLinking(false);
+      setMissing(false);
+      setReady(true);
+      return { error: "", ownsStore: true };
+    }
+
     let owned = { store: null, error: "" };
 
     if (user) {
@@ -282,8 +300,9 @@ export function CatalogProvider({ children }) {
     const { data } = supabase.auth.onAuthStateChange((event, session) => {
       const user = toAccount(session?.user);
       accountRef.current = user;
-      if (user && (event === "SIGNED_IN" || event === "INITIAL_SESSION")) setLinking(true);
+      if (user && event === "SIGNED_IN") setLinking(true);
       setAccount(user);
+      if (event === "SIGNED_IN" || event === "SIGNED_OUT") refresh();
     });
 
     return () => {
@@ -293,11 +312,6 @@ export function CatalogProvider({ children }) {
       data.subscription.unsubscribe();
     };
   }, [refresh]);
-
-  useEffect(() => {
-    if (!ready) return;
-    refresh();
-  }, [account?.id, ready, refresh]);
 
   const register = useCallback(
     async ({ name, storeName, email, password }) => {

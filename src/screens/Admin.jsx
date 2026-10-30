@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { paidMessage, paidTitle } from "../config";
 import { useCatalog } from "../catalog";
-import { money, slugify } from "../format";
+import { formatPhone, money, slugify } from "../format";
 import { PaidCopy } from "../PaidCopy";
 import { fetchShopOrders, fetchShopSecretStatus } from "../remote";
 import { useUI } from "../router";
@@ -15,8 +15,12 @@ const ORDER_FILTERS = [
   ["canceled", "Cancelado"],
 ];
 
+function isPaidOrder(order) {
+  return order.status === "paid" || Boolean(order.paid_at);
+}
+
 function displayOrderStatus(order) {
-  if (order.status === "paid") return "paid";
+  if (isPaidOrder(order)) return "paid";
   if (order.status === "canceled") return "canceled";
   if (new Date(order.created_at).getTime() < Date.now() - 60 * 60 * 1000) return "canceled";
   return "pending";
@@ -303,7 +307,7 @@ function AdminPanel() {
   }, [shop]);
 
   useEffect(() => {
-    if (!shopId) return;
+    if (tab !== "loja" || !shopId) return;
     let cancel = false;
     fetchShopSecretStatus(shopId).then((result) => {
       if (cancel || result.error) return;
@@ -312,7 +316,7 @@ function AdminPanel() {
     return () => {
       cancel = true;
     };
-  }, [shopId]);
+  }, [tab, shopId]);
 
   useEffect(() => {
     if (tab !== "pedidos" || !shopId) return;
@@ -548,7 +552,9 @@ function AdminPanel() {
                 {orderStatusLabel(displayOrderStatus(order))} · {money(Number(order.total))}
               </strong>
               <p className="muted">
-                {order.customer_name} · {order.customer_mode === "entrega" ? "Entrega" : "Retirada"}
+                {order.customer_name}
+                {order.customer_whatsapp ? ` · ${formatPhone(order.customer_whatsapp)}` : ""}
+                {` · ${order.customer_mode === "entrega" ? "Entrega" : "Retirada"}`}
               </p>
               {order.customer_mode === "entrega" && order.customer_address ? <p className="muted">{order.customer_address}</p> : null}
               <p className="muted">

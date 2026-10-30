@@ -26,6 +26,7 @@ function customerKey(slug) {
 
 const emptyCustomer = {
   name: "",
+  whatsapp: "",
   mode: "retirada",
   address: "",
   notes: "",

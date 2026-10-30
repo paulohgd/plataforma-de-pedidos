@@ -1,4 +1,4 @@
-import { money } from "./format.js";
+import { formatPhone, money } from "./format.js";
 
 export function shopWhatsapp(shop) {
   return String(shop?.whatsapp || "").replace(/\D/g, "");
@@ -36,6 +36,7 @@ export function buildOrderText({ shop, customer, lines, total, paid = false, pay
     paid ? `*${shop.name} — pedido pago*` : `*${shop.name} — novo pedido*`,
     "",
     `*Cliente:* ${customer.name.trim()}`,
+    `*WhatsApp:* ${formatPhone(customer.whatsapp) || customer.whatsapp || "-"}`,
     `*Tipo:* ${customer.mode === "entrega" ? "Entrega" : "Retirada"}`,
   ];
 

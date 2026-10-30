@@ -383,20 +383,38 @@ function dataUrlToBlob(dataUrl) {
 
 export async function fetchShopOrders(shopId) {
   const cutoff = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-  await supabase
+  await Promise.all([
+    supabase
+      .from("orders")
+      .update({ status: "paid" })
+      .eq("shop_id", shopId)
+      .not("paid_at", "is", null)
+      .neq("status", "paid"),
+    supabase
+      .from("orders")
+      .update({ status: "canceled" })
+      .eq("shop_id", shopId)
+      .eq("status", "pending")
+      .is("paid_at", null)
+      .lt("created_at", cutoff),
+  ]);
+  let { data, error } = await supabase
     .from("orders")
-    .update({ status: "canceled" })
-    .eq("shop_id", shopId)
-    .eq("status", "pending")
-    .lt("created_at", cutoff);
-  const { data, error } = await supabase
-    .from("orders")
-    .select("id, status, customer_name, customer_mode, customer_address, customer_notes, items, total, paid_at, created_at")
+    .select("id, status, customer_name, customer_whatsapp, customer_mode, customer_address, customer_notes, items, total, paid_at, created_at")
     .eq("shop_id", shopId)
     .order("created_at", { ascending: false })
     .limit(80);
+  if (error && /customer_whatsapp/i.test(error.message || "")) {
+    ({ data, error } = await supabase
+      .from("orders")
+      .select("id, status, customer_name, customer_mode, customer_address, customer_notes, items, total, paid_at, created_at")
+      .eq("shop_id", shopId)
+      .order("created_at", { ascending: false })
+      .limit(80));
+  }
   if (error) return { error: explain(error), orders: [] };
   const orders = (data || []).map((order) => {
+    if (order.paid_at) return { ...order, status: "paid" };
     if (order.status === "pending" && new Date(order.created_at).getTime() < Date.now() - 60 * 60 * 1000) {
       return { ...order, status: "canceled" };
     }

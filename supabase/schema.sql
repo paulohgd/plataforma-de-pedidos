@@ -350,6 +350,7 @@ create table if not exists public.orders (
 );
 
 alter table public.orders add column if not exists whatsapp_sent_at timestamptz;
+alter table public.orders add column if not exists customer_whatsapp text not null default '';
 
 create unique index if not exists orders_stripe_session_key on public.orders (stripe_session_id) where stripe_session_id is not null;
 create index if not exists orders_shop_created_key on public.orders (shop_id, created_at desc);

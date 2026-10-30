@@ -17,6 +17,43 @@ export function slugify(value) {
   return slug || "loja";
 }
 
+export function phoneDigits(value) {
+  return String(value || "").replace(/\D/g, "").slice(0, 13);
+}
+
+export function nationalPhone(value) {
+  const digits = phoneDigits(value);
+  if (digits.startsWith("55") && digits.length >= 12) return digits.slice(2);
+  return digits;
+}
+
+export function fullPhone(value) {
+  const national = nationalPhone(value);
+  if (national.length < 10) return "";
+  return `55${national}`;
+}
+
+export function validPhone(value) {
+  const national = nationalPhone(value);
+  return national.length === 10 || national.length === 11;
+}
+
+export function formatPhone(value) {
+  const national = nationalPhone(value);
+  if (!national) return "";
+  const ddd = national.slice(0, 2);
+  const rest = national.slice(2);
+  if (!rest) return ddd.length === 2 ? `(${ddd})` : national;
+  if (rest.length <= 4) return `(${ddd}) ${rest}`;
+  if (rest.length <= 8) return `(${ddd}) ${rest.slice(0, rest.length - 4)}-${rest.slice(-4)}`;
+  return `(${ddd}) ${rest.slice(0, 5)}-${rest.slice(5, 9)}`;
+}
+
+export function checkoutEmail(value) {
+  const phone = fullPhone(value);
+  return phone ? `${phone}@cliente.pediaqui.dev.br` : "";
+}
+
 export function groupHint(group) {
   const max = group.max;
   const min = group.min || 0;
