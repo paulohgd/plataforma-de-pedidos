@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { paidMessage, paidTitle } from "../config";
 import { useCatalog } from "../catalog";
-import { formatPhone, money, slugify } from "../format";
+import { formatPhone, money, saoPauloDayBounds, slugify } from "../format";
 import { PaidCopy } from "../PaidCopy";
 import { fetchShopOrders, fetchShopSecretStatus } from "../remote";
 import { useUI } from "../router";
-import { PageHead, Thumb } from "../ui";
+import { IconCalendar, PageHead, Thumb } from "../ui";
 import ItemTypesPanel from "./ItemTypesPanel";
 import RequireOwner from "./RequireOwner";
 
@@ -14,6 +14,8 @@ const ORDER_FILTERS = [
   ["pending", "Aguardando pagamento"],
   ["canceled", "Cancelado"],
 ];
+const ORDER_PAGE_SIZE = 5;
+const ORDER_DAYS_BACK = 5;
 
 function isPaidOrder(order) {
   return order.status === "paid" || Boolean(order.paid_at);
@@ -30,6 +32,138 @@ function orderStatusLabel(status) {
   if (status === "paid") return "Pago";
   if (status === "pending") return "Aguardando pagamento";
   return "Cancelado";
+}
+
+function formatOrderWhen(order) {
+  const raw = order.paid_at || order.created_at;
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString("pt-BR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "America/Sao_Paulo",
+  });
+}
+
+function spDayKey(date) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function todayHeading() {
+  return new Date().toLocaleDateString("pt-BR", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    timeZone: "America/Sao_Paulo",
+  });
+}
+
+function selectedDayHeading(daysBack) {
+  return saoPauloDayBounds(daysBack).start.toLocaleDateString("pt-BR", {
+    weekday: "short",
+    day: "2-digit",
+    month: "2-digit",
+    timeZone: "America/Sao_Paulo",
+  }).replace(".", "");
+}
+
+function monthCells(anchor) {
+  const year = Number(new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric" }).format(anchor));
+  const month = Number(new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", month: "2-digit" }).format(anchor));
+  const first = new Date(`${year}-${String(month).padStart(2, "0")}-01T00:00:00-03:00`);
+  const pad = (first.getUTCDay() + 6) % 7;
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const cells = [];
+  for (let index = pad; index > 0; index -= 1) cells.push(new Date(first.getTime() - index * 86400000));
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    cells.push(new Date(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}T00:00:00-03:00`));
+  }
+  return {
+    title: first.toLocaleDateString("pt-BR", { month: "long", year: "numeric", timeZone: "America/Sao_Paulo" }),
+    cells,
+  };
+}
+
+function OrderDayPicker({ daysBack, onChange }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef(null);
+  const today = saoPauloDayBounds(0).start;
+  const allowed = new Set(Array.from({ length: ORDER_DAYS_BACK + 1 }, (_, index) => spDayKey(saoPauloDayBounds(index).start)));
+  const selectedKey = spDayKey(saoPauloDayBounds(daysBack).start);
+  const todayKey = spDayKey(today);
+  const month = monthCells(today);
+
+  useEffect(() => {
+    function close(event) {
+      if (event.type === "keydown" && event.key !== "Escape") return;
+      if (event.type === "pointerdown" && box.current?.contains(event.target)) return;
+      setOpen(false);
+    }
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, []);
+
+  return (
+    <div className="order-day" ref={box}>
+      <div className="order-day-bar">
+        <div>
+          <p className="order-today">{todayHeading()}</p>
+          {daysBack > 0 ? <p className="muted">Mostrando {selectedDayHeading(daysBack)}</p> : null}
+        </div>
+        <button
+          type="button"
+          className="icon-btn"
+          aria-label="Abrir calendário"
+          aria-expanded={open}
+          onClick={() => setOpen((current) => !current)}
+        >
+          <IconCalendar />
+        </button>
+      </div>
+      {open ? (
+        <div className="mini-cal" role="dialog" aria-label="Escolher o dia dos pedidos">
+          <p className="mini-cal-title">{month.title}</p>
+          <div className="mini-cal-week">
+            {["S", "T", "Q", "Q", "S", "S", "D"].map((label, index) => (
+              <span key={`${label}-${index}`}>{label}</span>
+            ))}
+          </div>
+          <div className="mini-cal-grid">
+            {month.cells.map((date) => {
+              const key = spDayKey(date);
+              const pickable = allowed.has(key);
+              const sameMonth = date.getUTCMonth() === today.getUTCMonth();
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  className={`${key === selectedKey ? "on" : pickable ? "pick" : ""}${key === todayKey ? " is-today" : ""}`.trim()}
+                  disabled={!pickable}
+                  onClick={() => {
+                    const diff = Math.round((today.getTime() - date.getTime()) / 86400000);
+                    onChange(Math.min(ORDER_DAYS_BACK, Math.max(0, diff)));
+                    setOpen(false);
+                  }}
+                >
+                  <span className={sameMonth ? "" : "faint"}>{date.getUTCDate()}</span>
+                </button>
+              );
+            })}
+          </div>
+          <p className="hint">Só os últimos {ORDER_DAYS_BACK} dias.</p>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function CategoryRow({ category, count, index, total, onRename, onRemove, onMove }) {
@@ -282,6 +416,8 @@ function AdminPanel() {
   const [orders, setOrders] = useState([]);
   const [categoryName, setCategoryName] = useState("");
   const [orderFilter, setOrderFilter] = useState("paid");
+  const [orderDay, setOrderDay] = useState(0);
+  const [orderPage, setOrderPage] = useState(1);
   const [confirmAccount, setConfirmAccount] = useState(false);
   const [secretsSaved, setSecretsSaved] = useState({ stripe: false, discord: false });
   const [shopForm, setShopForm] = useState({
@@ -333,9 +469,16 @@ function AdminPanel() {
   }, [tab, shopId]);
 
   useEffect(() => {
+    if (tab !== "pedidos") return;
+    setOrderDay(0);
+    setOrderPage(1);
+    setOrderFilter("paid");
+  }, [tab]);
+
+  useEffect(() => {
     if (tab !== "pedidos" || !shopId) return;
     let cancel = false;
-    fetchShopOrders(shopId).then((result) => {
+    fetchShopOrders(shopId, orderDay).then((result) => {
       if (cancel) return;
       if (result.error) showError(result.error);
       else setOrders(result.orders);
@@ -343,7 +486,7 @@ function AdminPanel() {
     return () => {
       cancel = true;
     };
-  }, [tab, shopId]);
+  }, [tab, shopId, orderDay]);
 
   function showError(message) {
     setError(message);
@@ -394,6 +537,10 @@ function AdminPanel() {
   }
 
   const loose = products.filter((product) => !categories.some((category) => category.id === product.category));
+  const visibleOrders = orders.filter((order) => displayOrderStatus(order) === orderFilter);
+  const orderPages = Math.max(1, Math.ceil(visibleOrders.length / ORDER_PAGE_SIZE));
+  const currentOrderPage = Math.min(orderPage, orderPages);
+  const pagedOrders = visibleOrders.slice((currentOrderPage - 1) * ORDER_PAGE_SIZE, currentOrderPage * ORDER_PAGE_SIZE);
 
   return (
     <div className="admin-page">
@@ -552,6 +699,13 @@ function AdminPanel() {
       {tab === "pedidos" ? (
         <div className="admin-list">
           <p className="hint">Pedidos pagos também vão para o Discord da loja. Sem pagamento em 1 hora, o pedido entra em Cancelado.</p>
+          <OrderDayPicker
+            daysBack={orderDay}
+            onChange={(daysBack) => {
+              setOrderDay(daysBack);
+              setOrderPage(1);
+            }}
+          />
           <div className="admin-tabs order-filters" role="tablist" aria-label="Filtro de pedidos">
             {ORDER_FILTERS.map(([id, label]) => (
               <button
@@ -560,21 +714,27 @@ function AdminPanel() {
                 role="tab"
                 aria-selected={orderFilter === id}
                 className={orderFilter === id ? "on" : ""}
-                onClick={() => setOrderFilter(id)}
+                onClick={() => {
+                  setOrderFilter(id);
+                  setOrderPage(1);
+                }}
               >
                 {label}
               </button>
             ))}
           </div>
-          {orders.filter((order) => displayOrderStatus(order) === orderFilter).length === 0 ? (
-            <p className="empty-inline">Nenhum pedido neste filtro.</p>
+          {visibleOrders.length === 0 ? (
+            <p className="empty-inline">
+              {orders.length === 0 ? "Nenhum pedido neste dia." : "Nenhum pedido neste filtro."}
+            </p>
           ) : null}
-          {orders
-            .filter((order) => displayOrderStatus(order) === orderFilter)
-            .map((order) => (
+          {pagedOrders.map((order) => {
+              const when = formatOrderWhen(order);
+              return (
             <article key={order.id} className="admin-card">
               <strong>
                 {orderStatusLabel(displayOrderStatus(order))} · {money(Number(order.total))}
+                {when ? ` · ${when}` : ""}
               </strong>
               <p className="muted">
                 {order.customer_name}
@@ -586,7 +746,21 @@ function AdminPanel() {
                 {(order.items || []).map((item) => `${item.qty}x ${item.name}`).join(" · ")}
               </p>
             </article>
-          ))}
+              );
+            })}
+          {visibleOrders.length > ORDER_PAGE_SIZE ? (
+            <div className="pager">
+              <button type="button" className="text-btn" disabled={currentOrderPage <= 1} onClick={() => setOrderPage(currentOrderPage - 1)}>
+                Voltar
+              </button>
+              <p className="pager-status">
+                Página {currentOrderPage} de {orderPages}
+              </p>
+              <button type="button" className="text-btn" disabled={currentOrderPage >= orderPages} onClick={() => setOrderPage(currentOrderPage + 1)}>
+                Avançar
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

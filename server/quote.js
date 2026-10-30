@@ -3,9 +3,11 @@ import { hydrateProducts } from "../src/menu.js";
 export function quoteCart(store, payload) {
   const products = hydrateProducts(store.products || [], store.itemTypes);
   const byId = new Map(products.map((product) => [product.id, product]));
+  const incoming = Array.isArray(payload.lines) ? payload.lines : [];
+  if (incoming.length > 40) return { error: "O pedido tem itens demais." };
   const lines = [];
 
-  for (const raw of payload.lines || []) {
+  for (const raw of incoming) {
     const product = byId.get(raw.productId);
     if (!product || product.active === false) return { error: "Um item da sacola não está disponível no cardápio." };
     const qty = Math.min(Math.max(Number(raw.qty) || 0, 0), 20);

@@ -9,6 +9,7 @@ import { buildOrderText, paymentKindFromStripe } from "../src/order.js";
 import { cents, quoteCart } from "./quote.js";
 import { sendShopDiscord } from "./discord.js";
 import { isShopPage, sendShopPage } from "./shopPage.js";
+import { allowedOrigin, publicError, readBody, readJson, securityHeaders, tooMany } from "./security.js";
 
 const port = Number(process.env.PORT) || 8787;
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
@@ -43,32 +44,11 @@ async function stripeForShop(shopId) {
 
 function json(response, status, payload) {
   response.writeHead(status, {
+    ...securityHeaders,
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
   });
   response.end(JSON.stringify(payload));
-}
-
-function readBody(request) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    request.on("data", (chunk) => chunks.push(chunk));
-    request.on("end", () => resolve(Buffer.concat(chunks)));
-    request.on("error", reject);
-  });
-}
-
-function originFrom(request, payload = {}) {
-  const header = String(request.headers.origin || request.headers.referer || "").replace(/\/$/, "");
-  if (header) {
-    try {
-      return new URL(header).origin;
-    } catch {
-      return header;
-    }
-  }
-  if (payload.origin) return String(payload.origin).replace(/\/$/, "");
-  return "http://127.0.0.1:5173";
 }
 
 async function loadShop(slug) {
@@ -158,12 +138,11 @@ function orderTextFromRow(shop, order, payment) {
   });
 }
 
-function stripeCustomerMeta(order) {
+function stripeOrderMeta(order, slug = "") {
   return {
-    customer_name: String(order.customer_name || "").slice(0, 500),
-    customer_whatsapp: String(order.customer_whatsapp || "").slice(0, 500),
-    customer_mode: String(order.customer_mode || "").slice(0, 40),
-    customer_address: String(order.customer_address || "").slice(0, 500),
+    order_id: String(order.id || ""),
+    shop_id: String(order.shop_id || ""),
+    shop_slug: String(slug || "").slice(0, 80),
   };
 }
 
@@ -208,11 +187,15 @@ async function fulfill(session, client) {
 }
 
 async function fulfillPaidIntent(orderId, intentId, client) {
-  if (!orderId || !intentId) return null;
+  if (!orderId || !intentId || !client) return null;
+  const intent = await client.paymentIntents.retrieve(intentId);
+  if (intent.status !== "succeeded") return null;
+  const metaOrder = String(intent.metadata?.order_id || "");
+  if (metaOrder && metaOrder !== String(orderId)) return null;
   return fulfill(
     {
       payment_status: "paid",
-      payment_intent: intentId,
+      payment_intent: intent.id,
       metadata: { order_id: orderId },
     },
     client,
@@ -239,13 +222,15 @@ async function settleOrder(existing, client) {
 
 async function createCheckout(request, response) {
   if (!supabase) {
-    json(response, 503, {
-      error: "Falta configurar SUPABASE_SERVICE_ROLE_KEY no arquivo .env.server.",
-    });
+    json(response, 503, { error: "Pagamento ainda não está configurado no servidor." });
+    return;
+  }
+  if (tooMany(request, 8, 5 * 60 * 1000)) {
+    json(response, 429, { error: "Muitas tentativas. Espere um pouco e tente de novo." });
     return;
   }
 
-  const payload = JSON.parse((await readBody(request)).toString("utf8") || "{}");
+  const payload = await readJson(request);
   const slug = String(payload.slug || "").trim();
   const customer = payload.customer || {};
   const name = String(customer.name || "").trim();
@@ -328,15 +313,16 @@ async function createCheckout(request, response) {
     return;
   }
 
-  const origin = originFrom(request, payload);
+  const origin = allowedOrigin(request);
   const returnUrl = `${origin}/loja/${encodeURIComponent(slug)}/pedido-pago?session_id={CHECKOUT_SESSION_ID}`;
+  const orderMeta = stripeOrderMeta({ ...order, shop_id: store.shopId }, slug);
 
   try {
     const session = await shopStripe.checkout.sessions.create({
       mode: "payment",
       ui_mode: "custom",
       locale: "pt-BR",
-      customer_email: checkoutEmail(whatsapp),
+      customer_email: checkoutEmail(order.id),
       customer_creation: "if_required",
       name_collection: { individual: { enabled: false } },
       return_url: returnUrl,
@@ -347,19 +333,9 @@ async function createCheckout(request, response) {
         },
       },
       expand: ["payment_intent"],
-      metadata: {
-        order_id: order.id,
-        shop_id: store.shopId,
-        shop_slug: slug,
-        ...stripeCustomerMeta(order),
-      },
+      metadata: orderMeta,
       payment_intent_data: {
-        metadata: {
-          order_id: order.id,
-          shop_id: store.shopId,
-          shop_slug: slug,
-          ...stripeCustomerMeta(order),
-        },
+        metadata: orderMeta,
       },
       line_items: quoted.lines.map((line) => ({
         quantity: line.qty,
@@ -374,23 +350,12 @@ async function createCheckout(request, response) {
       })),
     });
 
-    let intent = typeof session.payment_intent === "object" ? session.payment_intent : null;
-    if (!intent?.client_secret) {
-      const intentId = typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id;
-      if (intentId) intent = await shopStripe.paymentIntents.retrieve(intentId);
-    }
     await supabase.from("orders").update({ stripe_session_id: session.id }).eq("id", order.id);
-    json(response, 200, {
-      clientSecret: session.client_secret,
-      paymentIntentSecret: intent?.client_secret || "",
-      sessionId: session.id,
-      orderId: order.id,
-      publishableKey,
-      returnUrl: `${origin}/loja/${encodeURIComponent(slug)}/pedido-pago?session_id=${encodeURIComponent(session.id)}`,
-    });
+    json(response, 200, { clientSecret: session.client_secret });
   } catch (error) {
+    console.error("Checkout:", error.message);
     await supabase.from("orders").update({ status: "canceled" }).eq("id", order.id);
-    json(response, 500, { error: error.message || "Não foi possível iniciar o pagamento." });
+    json(response, 500, { error: "Não foi possível iniciar o pagamento." });
   }
 }
 
@@ -400,12 +365,13 @@ async function shopCopy(shopId) {
   return (await supabase.from("shops").select("name, slug").eq("id", shopId).maybeSingle()).data;
 }
 
-async function readSession(request, response, url) {
+async function readSession(request, response) {
   if (!supabase) {
     json(response, 503, { error: "Pagamento ainda não está configurado no servidor." });
     return;
   }
-  const sessionId = url.searchParams.get("session_id") || "";
+  const payload = await readJson(request, 4096);
+  const sessionId = String(payload.sessionId || "");
   if (!sessionId.startsWith("cs_")) {
     json(response, 400, { error: "Sessão de pagamento inválida." });
     return;
@@ -425,11 +391,8 @@ async function readSession(request, response, url) {
   const paid = order.status === "paid";
   json(response, 200, {
     paid,
-    sent: Boolean(order.whatsapp_sent_at),
-    shopName: shop?.name || "",
     paidTitle: shop?.paid_title || paidTitle,
     paidMessage: shop?.paid_message || paidMessage,
-    pixCopy: "",
   });
 }
 
@@ -455,7 +418,11 @@ async function createPix(request, response) {
     json(response, 503, { error: "Pagamento ainda não está configurado no servidor." });
     return;
   }
-  const payload = JSON.parse((await readBody(request)).toString("utf8") || "{}");
+  if (tooMany(request, 12, 5 * 60 * 1000)) {
+    json(response, 429, { error: "Muitas tentativas. Espere um pouco e tente de novo." });
+    return;
+  }
+  const payload = await readJson(request, 4096);
   const sessionId = String(payload.sessionId || "");
   if (!sessionId.startsWith("cs_")) {
     json(response, 400, { error: "Sessão de pagamento inválida." });
@@ -499,16 +466,13 @@ async function createPix(request, response) {
       payment_method_data: { type: "pix" },
       payment_method_options: { pix: { expires_after_seconds: PIX_SECONDS } },
       confirm: true,
-      metadata: {
-        order_id: existing.id,
-        shop_id: existing.shop_id,
-        ...stripeCustomerMeta(existing),
-      },
+      metadata: stripeOrderMeta(existing),
     });
     await supabase.from("orders").update({ stripe_payment_intent: confirmed.id }).eq("id", existing.id);
     json(response, 200, pixFromIntent(confirmed));
   } catch (error) {
-    json(response, 500, { error: error.message || "Não foi possível gerar o Pix." });
+    console.error("Pix:", error.message);
+    json(response, 500, { error: "Não foi possível gerar o Pix." });
   }
 }
 
@@ -540,7 +504,7 @@ async function handleWebhook(request, response) {
     json(response, 200, { received: true });
     return;
   }
-  const raw = await readBody(request);
+  const raw = await readBody(request, 262144);
   let event;
   try {
     event = JSON.parse(raw.toString("utf8") || "{}");
@@ -568,25 +532,29 @@ async function handleWebhook(request, response) {
     return;
   }
 
-  if (type === "payment_intent.succeeded") {
-    const orderId = order?.id || String(object.metadata?.order_id || "");
-    await fulfillPaidIntent(orderId, object.id, client);
-    json(response, 200, { received: true });
-    return;
-  }
+  try {
+    if (type === "payment_intent.succeeded") {
+      const orderId = order?.id || String(object.metadata?.order_id || "");
+      await fulfillPaidIntent(orderId, object.id, client);
+      json(response, 200, { received: true });
+      return;
+    }
 
-  let sessionId = String(object.id || "").startsWith("cs_") ? object.id : order?.stripe_session_id || "";
-  if (!sessionId && String(object.payment_intent || "").startsWith("pi_")) {
-    const listed = await client.checkout.sessions.list({ payment_intent: object.payment_intent, limit: 1 });
-    sessionId = listed.data[0]?.id || "";
-  }
-  if (!sessionId) {
-    json(response, 200, { received: true });
-    return;
-  }
+    let sessionId = String(object.id || "").startsWith("cs_") ? object.id : order?.stripe_session_id || "";
+    if (!sessionId && String(object.payment_intent || "").startsWith("pi_")) {
+      const listed = await client.checkout.sessions.list({ payment_intent: object.payment_intent, limit: 1 });
+      sessionId = listed.data[0]?.id || "";
+    }
+    if (!sessionId) {
+      json(response, 200, { received: true });
+      return;
+    }
 
-  const session = await client.checkout.sessions.retrieve(sessionId);
-  await fulfill(session, client);
+    const session = await client.checkout.sessions.retrieve(sessionId);
+    await fulfill(session, client);
+  } catch (error) {
+    console.error("Webhook:", error.message);
+  }
   json(response, 200, { received: true });
 }
 
@@ -594,23 +562,20 @@ const server = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url, `http://${request.headers.host || "127.0.0.1"}`);
     if (request.method === "OPTIONS") {
-      response.writeHead(204);
+      response.writeHead(204, securityHeaders);
       response.end();
       return;
     }
     if (request.method === "GET" && url.pathname === "/api/health") {
-      json(response, 200, {
-        ok: true,
-        database: Boolean(supabase),
-      });
+      json(response, 200, { ok: true });
       return;
     }
     if (request.method === "POST" && url.pathname === "/api/create-checkout") {
       await createCheckout(request, response);
       return;
     }
-    if (request.method === "GET" && url.pathname === "/api/checkout-session") {
-      await readSession(request, response, url);
+    if (request.method === "POST" && url.pathname === "/api/checkout-session") {
+      await readSession(request, response);
       return;
     }
     if (request.method === "POST" && url.pathname === "/api/create-pix") {
@@ -627,7 +592,10 @@ const server = http.createServer(async (request, response) => {
     }
     json(response, 404, { error: "Rota não encontrada." });
   } catch (error) {
-    json(response, 500, { error: error.message || "Erro no servidor de pagamento." });
+    const status = error?.code === "PAYLOAD_TOO_LARGE" ? 413 : error?.code === "INVALID_JSON" ? 400 : 500;
+    json(response, status, {
+      error: publicError(error, "Erro no servidor de pagamento."),
+    });
   }
 });
 

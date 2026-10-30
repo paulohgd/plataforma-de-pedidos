@@ -1,5 +1,5 @@
 import { paidMessage, paidTitle, shop as defaultShop } from "./config";
-import { slugify } from "./format";
+import { saoPauloDayBounds, slugify } from "./format";
 import { cloneItemType, seedCategories, seedItemTypes, seedProducts } from "./menu";
 import { supabase } from "./supabase";
 
@@ -406,8 +406,9 @@ function dataUrlToBlob(dataUrl) {
   return new Blob([bytes], { type: mime });
 }
 
-export async function fetchShopOrders(shopId) {
+export async function fetchShopOrders(shopId, daysBack = 0) {
   const cutoff = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const { start, end } = saoPauloDayBounds(daysBack);
   await Promise.all([
     supabase
       .from("orders")
@@ -423,19 +424,25 @@ export async function fetchShopOrders(shopId) {
       .is("paid_at", null)
       .lt("created_at", cutoff),
   ]);
+  const columns =
+    "id, status, customer_name, customer_whatsapp, customer_mode, customer_address, customer_notes, items, total, paid_at, created_at";
   let { data, error } = await supabase
     .from("orders")
-    .select("id, status, customer_name, customer_whatsapp, customer_mode, customer_address, customer_notes, items, total, paid_at, created_at")
+    .select(columns)
     .eq("shop_id", shopId)
+    .gte("created_at", start.toISOString())
+    .lt("created_at", end.toISOString())
     .order("created_at", { ascending: false })
-    .limit(80);
+    .limit(200);
   if (error && /customer_whatsapp/i.test(error.message || "")) {
     ({ data, error } = await supabase
       .from("orders")
       .select("id, status, customer_name, customer_mode, customer_address, customer_notes, items, total, paid_at, created_at")
       .eq("shop_id", shopId)
+      .gte("created_at", start.toISOString())
+      .lt("created_at", end.toISOString())
       .order("created_at", { ascending: false })
-      .limit(80));
+      .limit(200));
   }
   if (error) return { error: explain(error), orders: [] };
   const orders = (data || []).map((order) => {

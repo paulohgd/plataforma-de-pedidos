@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useCart } from "../cart";
 import { paidMessage, paidTitle } from "../config";
 import { PaidCopy } from "../PaidCopy";
+import { fetchCheckoutSession, readCheckoutSessionId } from "../pay";
 import { useUI } from "../router";
 import { PageHead } from "../ui";
 
@@ -18,66 +19,59 @@ export default function Paid() {
   }, [route.slug, clear]);
 
   useEffect(() => {
-    const sessionId = new URLSearchParams(window.location.search).get("session_id") || "";
+    const sessionId = readCheckoutSessionId(route.slug);
     if (!sessionId) {
-      setState({ status: "error", error: "Pagamento não encontrado.", title: paidTitle, message: paidMessage });
+      setState({
+        status: "error",
+        error: "Não encontramos a sessão deste pagamento. Se o valor foi cobrado, o pedido já chegou na loja.",
+        title: paidTitle,
+        message: paidMessage,
+      });
       return;
     }
 
     let cancel = false;
     async function load() {
-      try {
-        const response = await fetch(`/api/checkout-session?session_id=${encodeURIComponent(sessionId)}`);
-        const payload = await response.json();
-        if (cancel) return;
-        if (!response.ok) {
-          setState({
-            status: "error",
-            error: payload.error || "Não foi possível confirmar o pagamento.",
-            title: paidTitle,
-            message: paidMessage,
-          });
-          return;
+      for (let attempt = 0; attempt < 8 && !cancel; attempt += 1) {
+        try {
+          const { payload } = await fetchCheckoutSession(sessionId);
+          if (cancel) return;
+          if (payload.paid) {
+            if (!cleared.current) {
+              cleared.current = true;
+              clear();
+            }
+            setState({
+              status: "paid",
+              error: "",
+              title: payload.paidTitle || paidTitle,
+              message: payload.paidMessage || paidMessage,
+            });
+            return;
+          }
+        } catch {
+          /* o webhook ainda pode confirmar o pedido */
         }
-        if (!payload.paid) {
-          setState({
-            status: "error",
-            error: "O pagamento ainda não foi confirmado.",
-            title: paidTitle,
-            message: paidMessage,
-          });
-          return;
-        }
-        if (!cleared.current) {
-          cleared.current = true;
-          clear();
-        }
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+      if (!cancel) {
         setState({
-          status: "paid",
-          error: "",
-          title: payload.paidTitle || paidTitle,
-          message: payload.paidMessage || paidMessage,
+          status: "error",
+          error: "O pagamento ainda não foi confirmado. Se o valor foi cobrado, aguarde um instante e atualize a página.",
+          title: paidTitle,
+          message: paidMessage,
         });
-      } catch {
-        if (!cancel) {
-          setState({
-            status: "error",
-            error: "Não foi possível confirmar o pagamento.",
-            title: paidTitle,
-            message: paidMessage,
-          });
-        }
       }
     }
     load();
     return () => {
       cancel = true;
     };
-  }, [clear]);
+  }, [clear, route.slug]);
 
   return (
     <div className="checkout-page">
-      <PageHead title="Pedido pago" />
+      <PageHead title="Pedido pago" onBack={goHome} />
       <div className="empty paid-box">
         {state.status === "loading" ? <h2>Confirmando o pagamento</h2> : null}
         {state.status === "error" ? (

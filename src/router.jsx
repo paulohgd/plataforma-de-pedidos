@@ -170,6 +170,11 @@ export function UIProvider({ children }) {
       const slug = currentSlug();
       go({ name: "checkout", slug }, shopPath(slug, "/checkout"));
     },
+    openPaid(sessionId = "") {
+      const slug = currentSlug();
+      const query = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "";
+      go({ name: "paid", slug }, `${shopPath(slug, "/pedido-pago")}${query}`, true);
+    },
     openSearch() {
       const slug = currentSlug();
       go({ name: "search", slug }, shopPath(slug, "/busca"));

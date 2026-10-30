@@ -2,6 +2,19 @@ export function money(value) {
   return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
+export function saoPauloDayBounds(daysBack = 0) {
+  const key = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+  const [year, month, day] = key.split("-").map(Number);
+  const start = new Date(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}T00:00:00-03:00`);
+  start.setTime(start.getTime() - Math.max(0, daysBack) * 24 * 60 * 60 * 1000);
+  return { start, end: new Date(start.getTime() + 24 * 60 * 60 * 1000) };
+}
+
 export function norm(value) {
   return String(value || "")
     .toLowerCase()
@@ -50,9 +63,9 @@ export function formatPhone(value) {
   return `(${ddd}) ${rest.slice(0, 5)}-${rest.slice(5, 9)}`;
 }
 
-export function checkoutEmail(value) {
-  const phone = fullPhone(value);
-  return phone ? `${phone}@cliente.pediaqui.dev.br` : "";
+export function checkoutEmail(orderId) {
+  const id = String(orderId || "").replace(/[^a-z0-9]/gi, "").slice(0, 32);
+  return id ? `pedido.${id}@cliente.pediaqui.dev.br` : "";
 }
 
 export function groupHint(group) {

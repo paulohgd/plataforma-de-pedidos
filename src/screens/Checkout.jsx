@@ -3,6 +3,7 @@ import { loadStripe } from "@stripe/stripe-js";
 import { useCatalog } from "../catalog";
 import { formatPhone, money, phoneDigits, validPhone } from "../format";
 import { useCart } from "../cart";
+import { checkoutSessionId, fetchCheckoutSession, rememberCheckoutSession } from "../pay";
 import { useUI } from "../router";
 import { PageHead } from "../ui";
 
@@ -15,8 +16,8 @@ function formatCountdown(ms) {
 
 export default function Checkout() {
   const { shop, ready, missing } = useCatalog();
-  const { lines, total, customer, setCustomer, clear } = useCart();
-  const { goHome, route } = useUI();
+  const { lines, total, customer, setCustomer } = useCart();
+  const { goHome, route, openPaid } = useUI();
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const [paying, setPaying] = useState(false);
@@ -30,31 +31,28 @@ export default function Checkout() {
   const [copied, setCopied] = useState(false);
   const [sessionId, setSessionId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
-  const [publishableKey, setPublishableKey] = useState("");
-  const [returnUrl, setReturnUrl] = useState("");
   const [checkoutReady, setCheckoutReady] = useState(false);
+  const [completing, setCompleting] = useState(false);
   const box = useRef(null);
   const walletBox = useRef(null);
   const checkoutRef = useRef(null);
   const paymentRef = useRef(null);
   const walletRef = useRef(null);
   const whatsappBox = useRef(null);
+  const leaving = useRef(false);
   const waiting = !ready || (route.slug && shop.slug !== route.slug && !missing);
   const pixMsLeft = pixExpiresAt ? pixExpiresAt - now : 0;
   const pixAlive = Boolean(pixCopy) && pixMsLeft > 0;
 
-  function paidPage() {
-    return (
-      returnUrl ||
-      `${window.location.origin}/loja/${encodeURIComponent(shop.slug)}/pedido-pago?session_id=${encodeURIComponent(sessionId)}`
-    );
-  }
-
-  function goPaid() {
+  function goPaid(id = sessionId) {
+    if (leaving.current) return;
+    leaving.current = true;
     const slug = shop.slug || route.slug;
+    const paidId = id || checkoutSessionId(clientSecret);
+    rememberCheckoutSession(slug, paidId);
     if (slug) localStorage.removeItem(`pedido-sacola:${slug}`);
-    clear();
-    window.location.assign(paidPage());
+    setCompleting(true);
+    openPaid(paidId);
   }
 
   async function confirmCheckout(extra = {}) {
@@ -72,7 +70,7 @@ export default function Checkout() {
       throw new Error(result.error?.message || "Não foi possível concluir o pagamento.");
     }
     if (result.session?.status?.type === "complete" && result.session.status.paymentStatus === "paid") {
-      goPaid();
+      goPaid(result.session.id || sessionId);
     }
   }
 
@@ -89,7 +87,7 @@ export default function Checkout() {
     let canceled = false;
     setCheckoutReady(false);
     (async () => {
-      const stripe = await loadStripe(publishableKey);
+      const stripe = await loadStripe(shop.stripePublishableKey);
       if (!stripe || canceled) return;
       walletRef.current?.unmount?.();
       const dark = document.documentElement.classList.contains("dark");
@@ -153,7 +151,7 @@ export default function Checkout() {
       walletRef.current = null;
       checkoutRef.current = null;
     };
-  }, [paying, clientSecret, publishableKey]);
+  }, [paying, clientSecret, shop.stripePublishableKey]);
 
   useEffect(() => {
     if (!paying || method !== "card" || !checkoutReady || !box.current) return;
@@ -198,10 +196,8 @@ export default function Checkout() {
     let cancel = false;
     async function tick() {
       try {
-        const response = await fetch(`/api/checkout-session?session_id=${encodeURIComponent(sessionId)}`);
-        const payload = await response.json();
+        const { payload } = await fetchCheckoutSession(sessionId);
         if (cancel) return;
-        if (payload.pixCopy) setPixCopy(payload.pixCopy);
         if (!payload.paid) return;
         goPaid();
       } catch {
@@ -214,7 +210,7 @@ export default function Checkout() {
       cancel = true;
       clearInterval(timer);
     };
-  }, [paying, sessionId, shop.slug, returnUrl]);
+  }, [paying, sessionId, shop.slug]);
 
   async function submit(event) {
     event.preventDefault();
@@ -253,13 +249,22 @@ export default function Checkout() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           slug: shop.slug,
-          origin: window.location.origin,
-          customer: { ...customer, name, whatsapp },
+          customer: {
+            name,
+            whatsapp,
+            mode: customer.mode,
+            address: customer.address,
+            notes: customer.notes,
+          },
           lines: lines.map((line) => ({
             productId: line.productId,
             qty: line.qty,
             note: line.note,
-            options: line.options,
+            options: (line.options || []).map((option) => ({
+              groupId: option.groupId,
+              itemId: option.itemId,
+              qty: option.qty,
+            })),
           })),
         }),
       });
@@ -268,10 +273,10 @@ export default function Checkout() {
         setError(payload.error || "Não foi possível iniciar o pagamento.");
         return;
       }
-      setPublishableKey(payload.publishableKey || shop.stripePublishableKey);
-      setSessionId(payload.sessionId || "");
-      setReturnUrl(payload.returnUrl || "");
+      const id = checkoutSessionId(payload.clientSecret);
       setClientSecret(payload.clientSecret);
+      setSessionId(id);
+      rememberCheckoutSession(shop.slug, id);
       setPaying(true);
     } catch {
       setError("Não foi possível falar com o servidor de pagamento. Rode npm run pay.");
@@ -323,6 +328,10 @@ export default function Checkout() {
       {waiting ? (
         <div className="empty">
           <h2>Carregando o pedido</h2>
+        </div>
+      ) : completing ? (
+        <div className="empty paid-box">
+          <h2>Confirmando o pagamento</h2>
         </div>
       ) : lines.length === 0 ? (
         <div className="empty">

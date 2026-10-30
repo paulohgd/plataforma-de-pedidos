@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyShopMeta, shopSlugFromPath } from "../src/shopMeta.js";
+import { securityHeaders } from "./security.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const htmlFiles = [
@@ -41,6 +42,7 @@ function publicUrl(request, pathname) {
 
 function sendHtml(response, status, html) {
   response.writeHead(status, {
+    ...securityHeaders,
     "Content-Type": "text/html; charset=utf-8",
     "Cache-Control": "no-store",
   });
