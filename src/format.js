@@ -18,13 +18,14 @@ export function slugify(value) {
 }
 
 export function phoneDigits(value) {
-  return String(value || "").replace(/\D/g, "").slice(0, 13);
+  return nationalPhone(value);
 }
 
 export function nationalPhone(value) {
-  const digits = phoneDigits(value);
-  if (digits.startsWith("55") && digits.length >= 12) return digits.slice(2);
-  return digits;
+  let digits = String(value || "").replace(/\D/g, "");
+  digits = digits.replace(/^0+/, "");
+  if (digits.startsWith("55") && digits.length >= 12) digits = digits.slice(2);
+  return digits.slice(0, 11);
 }
 
 export function fullPhone(value) {

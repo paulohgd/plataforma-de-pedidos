@@ -15,7 +15,7 @@ function formatCountdown(ms) {
 
 export default function Checkout() {
   const { shop, ready, missing } = useCatalog();
-  const { lines, total, customer, setCustomer } = useCart();
+  const { lines, total, customer, setCustomer, clear } = useCart();
   const { goHome, route } = useUI();
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -38,6 +38,7 @@ export default function Checkout() {
   const checkoutRef = useRef(null);
   const paymentRef = useRef(null);
   const walletRef = useRef(null);
+  const whatsappBox = useRef(null);
   const waiting = !ready || (route.slug && shop.slug !== route.slug && !missing);
   const pixMsLeft = pixExpiresAt ? pixExpiresAt - now : 0;
   const pixAlive = Boolean(pixCopy) && pixMsLeft > 0;
@@ -47,6 +48,13 @@ export default function Checkout() {
       returnUrl ||
       `${window.location.origin}/loja/${encodeURIComponent(shop.slug)}/pedido-pago?session_id=${encodeURIComponent(sessionId)}`
     );
+  }
+
+  function goPaid() {
+    const slug = shop.slug || route.slug;
+    if (slug) localStorage.removeItem(`pedido-sacola:${slug}`);
+    clear();
+    window.location.assign(paidPage());
   }
 
   async function confirmCheckout(extra = {}) {
@@ -64,7 +72,7 @@ export default function Checkout() {
       throw new Error(result.error?.message || "Não foi possível concluir o pagamento.");
     }
     if (result.session?.status?.type === "complete" && result.session.status.paymentStatus === "paid") {
-      window.location.assign(paidPage());
+      goPaid();
     }
   }
 
@@ -195,7 +203,7 @@ export default function Checkout() {
         if (cancel) return;
         if (payload.pixCopy) setPixCopy(payload.pixCopy);
         if (!payload.paid) return;
-        window.location.assign(paidPage());
+        goPaid();
       } catch {
         /* o webhook ainda pode confirmar o pedido */
       }
@@ -218,14 +226,17 @@ export default function Checkout() {
       setError("A loja está fechada no momento.");
       return;
     }
-    if (customer.name.trim().length < 2) {
+    const name = String(customer.name || "").trim();
+    const whatsapp = phoneDigits(whatsappBox.current?.value || customer.whatsapp);
+    if (name.length < 2) {
       setError("Informe seu nome.");
       return;
     }
-    if (!validPhone(customer.whatsapp)) {
+    if (!validPhone(whatsapp)) {
       setError("Informe um WhatsApp válido, com DDD.");
       return;
     }
+    if (whatsapp !== customer.whatsapp) setCustomer({ whatsapp });
     if (customer.mode === "entrega" && customer.address.trim().length < 6) {
       setError("Informe o endereço da entrega.");
       return;
@@ -243,7 +254,7 @@ export default function Checkout() {
         body: JSON.stringify({
           slug: shop.slug,
           origin: window.location.origin,
-          customer,
+          customer: { ...customer, name, whatsapp },
           lines: lines.map((line) => ({
             productId: line.productId,
             qty: line.qty,
@@ -285,7 +296,7 @@ export default function Checkout() {
           setPixCopy(payload.pixCopy);
           setPixExpiresAt(Number(payload.expiresAt || 0));
         }
-        if (payload.paid) window.location.assign(paidPage());
+        if (payload.paid) goPaid();
         return;
       }
       await confirmCheckout();
@@ -414,12 +425,16 @@ export default function Checkout() {
           <label>
             WhatsApp
             <input
+              ref={whatsappBox}
+              type="tel"
+              name="tel"
               value={formatPhone(customer.whatsapp)}
               inputMode="tel"
               autoComplete="tel"
-              maxLength={16}
+              maxLength={22}
               placeholder="(11) 99999-9999"
               onChange={(event) => setCustomer({ whatsapp: phoneDigits(event.target.value) })}
+              onInput={(event) => setCustomer({ whatsapp: phoneDigits(event.target.value) })}
             />
           </label>
 

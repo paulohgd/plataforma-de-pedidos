@@ -6,10 +6,16 @@ import { useUI } from "../router";
 import { PageHead } from "../ui";
 
 export default function Paid() {
-  const { goHome } = useUI();
+  const { goHome, route } = useUI();
   const { clear } = useCart();
   const [state, setState] = useState({ status: "loading", error: "", title: paidTitle, message: paidMessage });
   const cleared = useRef(false);
+
+  useEffect(() => {
+    if (!route.slug) return;
+    localStorage.removeItem(`pedido-sacola:${route.slug}`);
+    clear();
+  }, [route.slug, clear]);
 
   useEffect(() => {
     const sessionId = new URLSearchParams(window.location.search).get("session_id") || "";

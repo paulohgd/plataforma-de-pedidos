@@ -80,8 +80,10 @@ export function CartProvider({ children }) {
   }, [customer, slug]);
 
   const clear = useCallback(() => {
+    skipSave.current = true;
     setLines([]);
-  }, []);
+    if (slug) localStorage.removeItem(cartKey(slug));
+  }, [slug]);
 
   const detailed = lines
     .map((line) => {
