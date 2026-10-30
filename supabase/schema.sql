@@ -105,6 +105,7 @@ create table if not exists public.products (
 alter table public.products drop constraint if exists products_kind;
 
 alter table public.products add column if not exists featured_rank integer not null default 0;
+alter table public.products add column if not exists active boolean not null default true;
 
 alter table public.shops enable row level security;
 alter table public.categories enable row level security;

@@ -17,6 +17,7 @@ import {
   insertCategory,
   saveCategoryOrder,
   saveFeaturedProducts,
+  saveProductActive,
   saveShopRow,
   saveShopSecrets,
   updateCategoryName,
@@ -80,6 +81,7 @@ function cleanProduct(product) {
     image,
     featured: Boolean(product.featured),
     featuredRank: Math.max(0, Math.round(Number(product.featuredRank) || 0)),
+    active: product.active !== false,
   };
 }
 
@@ -127,7 +129,11 @@ export function CatalogProvider({ children }) {
     () => hydrateProducts(store.products, store.itemTypes),
     [store.products, store.itemTypes],
   );
-  const featured = useMemo(() => orderFeatured(products), [products]);
+  const liveProducts = useMemo(
+    () => products.filter((product) => product.active !== false),
+    [products],
+  );
+  const featured = useMemo(() => orderFeatured(liveProducts), [liveProducts]);
 
   function commitStore(next) {
     storeRef.current = next;
@@ -576,7 +582,14 @@ export function CatalogProvider({ children }) {
         return "Use uma foto do aparelho ou um link que comece com http:// ou https://.";
       }
       if (image.startsWith("data:") && image.length > 1_500_000) return "A imagem ficou grande demais. Escolha outra foto.";
-      const draft = cleanProduct({ ...input, name, price, image, description: String(input.description || "").trim() });
+      const draft = cleanProduct({
+        ...input,
+        name,
+        price,
+        image,
+        description: String(input.description || "").trim(),
+        active: input.active !== false,
+      });
       if (!draft) return "Não foi possível salvar o produto.";
       const id = draft.id || uniqueId(name, new Set(store.products.map((product) => product.id)));
       const previous = store.products.find((product) => product.id === id);
@@ -621,6 +634,24 @@ export function CatalogProvider({ children }) {
     [deny, store.shopId],
   );
 
+  const setProductActive = useCallback(
+    async (id, active) => {
+      const denied = deny();
+      if (denied) return denied;
+      const previous = store.products.find((product) => product.id === id);
+      if (!previous) return "Produto não encontrado.";
+      const nextProduct = { ...previous, active: Boolean(active) };
+      const error = await saveProductActive(store.shopId, id, nextProduct.active);
+      if (error) return error;
+      setStore((current) => ({
+        ...current,
+        products: current.products.map((product) => (product.id === id ? nextProduct : product)),
+      }));
+      return "";
+    },
+    [deny, store.products, store.shopId],
+  );
+
   const setFeaturedOrder = useCallback(
     async (ids) => {
       const denied = deny();
@@ -652,6 +683,7 @@ export function CatalogProvider({ children }) {
     shopId: store.shopId,
     categories: store.categories,
     products,
+    liveProducts,
     featured,
     stores,
     listed,
@@ -665,10 +697,13 @@ export function CatalogProvider({ children }) {
     linking,
     retryStore,
     getProduct(id) {
-      return products.find((product) => product.id === id) || null;
+      const product = products.find((item) => item.id === id) || null;
+      if (!product) return null;
+      if (product.active === false && !isOwner) return null;
+      return product;
     },
     productsIn(categoryId) {
-      return products.filter((product) => product.category === categoryId);
+      return liveProducts.filter((product) => product.category === categoryId);
     },
     register,
     login,
@@ -683,6 +718,7 @@ export function CatalogProvider({ children }) {
     saveItemType,
     removeItemType,
     saveProduct,
+    setProductActive,
     setFeaturedOrder,
     removeProduct,
     removeAccount,

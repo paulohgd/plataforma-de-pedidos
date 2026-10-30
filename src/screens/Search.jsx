@@ -4,11 +4,11 @@ import { norm } from "../format";
 import { ItemLink, PageHead } from "../ui";
 
 export default function Search() {
-  const { categories, products, productsIn } = useCatalog();
+  const { categories, liveProducts, productsIn } = useCatalog();
   const [query, setQuery] = useState("");
   const needle = norm(query.trim());
   const results = needle
-    ? products.filter((product) => norm(`${product.name} ${product.description}`).includes(needle))
+    ? liveProducts.filter((product) => norm(`${product.name} ${product.description}`).includes(needle))
     : [];
 
   return (

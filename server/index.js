@@ -100,6 +100,7 @@ async function loadShop(slug) {
       price: Number(product.price),
       image: product.image || "",
       featured: Boolean(product.featured),
+      active: product.active !== false,
     })),
     itemTypes: (itemTypes || []).map((type) => ({
       id: type.id,

@@ -1146,6 +1146,10 @@ h1, h2, h3 { line-height: 1.2; }
   align-items: flex-start;
 }
 
+.admin-card.product-card.off {
+  opacity: 0.62;
+}
+
 .grow { flex: 1; min-width: 0; }
 
 .confirm-row {

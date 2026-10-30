@@ -396,7 +396,7 @@ export function hydrateProducts(list, types = seedItemTypes) {
 
   function optionFrom(id, max) {
     const product = byId.get(id);
-    if (!product) return null;
+    if (!product || product.active === false) return null;
     return {
       id: product.id,
       name: product.name,

@@ -31,6 +31,7 @@ function ProductEditor() {
     itemTypes.some((type) => type.id === existing?.kind) ? existing.kind : itemTypes[0]?.id || "simple",
   );
   const [featured, setFeatured] = useState(Boolean(existing?.featured));
+  const [active, setActive] = useState(existing?.active !== false);
   const [image, setImage] = useState(existing?.image || "");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -72,6 +73,7 @@ function ProductEditor() {
       kind,
       image,
       featured,
+      active,
     });
     setBusy(false);
     if (message) {
@@ -174,6 +176,10 @@ function ProductEditor() {
           </select>
         </label>
         <p className="hint">Os tipos e as opções extras são cadastrados na aba Tipo do item.</p>
+        <label className="check">
+          <input type="checkbox" checked={active} onChange={(event) => setActive(event.target.checked)} />
+          Disponível no cardápio
+        </label>
         <label className="check">
           <input type="checkbox" checked={featured} onChange={(event) => setFeatured(event.target.checked)} />
           Mostrar nos destaques

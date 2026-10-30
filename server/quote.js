@@ -7,7 +7,7 @@ export function quoteCart(store, payload) {
 
   for (const raw of payload.lines || []) {
     const product = byId.get(raw.productId);
-    if (!product) return { error: "Um item da sacola não existe mais no cardápio." };
+    if (!product || product.active === false) return { error: "Um item da sacola não está disponível no cardápio." };
     const qty = Math.min(Math.max(Number(raw.qty) || 0, 0), 20);
     if (qty < 1) return { error: "Quantidade inválida." };
 

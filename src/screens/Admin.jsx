@@ -101,7 +101,7 @@ function FeaturedEditor({ products, featured, onSave, onError, notify }) {
   const [pick, setPick] = useState("");
   const [busy, setBusy] = useState(false);
   const available = products
-    .filter((product) => !product.featured)
+    .filter((product) => !product.featured && product.active !== false)
     .slice()
     .sort((a, b) => String(a.name).localeCompare(String(b.name), "pt-BR"));
 
@@ -205,16 +205,26 @@ function FeaturedEditor({ products, featured, onSave, onError, notify }) {
   );
 }
 
-function ProductRow({ product, categoryName, onEdit, onRemove }) {
+function ProductRow({ product, categoryName, onEdit, onRemove, onToggle }) {
   const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const available = product.active !== false;
+
+  async function toggle() {
+    if (busy) return;
+    setBusy(true);
+    await onToggle(product.id, !available);
+    setBusy(false);
+  }
 
   return (
-    <article className="admin-card product-card">
+    <article className={available ? "admin-card product-card" : "admin-card product-card off"}>
       <Thumb src={product.image} className="thumb" />
       <div className="grow">
         <strong>{product.name}</strong>
         <p className="muted">
           {categoryName} · {money(product.price)}
+          {available ? "" : " · Fora do cardápio"}
         </p>
         {confirming ? (
           <div className="confirm-row">
@@ -230,6 +240,9 @@ function ProductRow({ product, categoryName, onEdit, onRemove }) {
           <div className="confirm-row">
             <button type="button" className="text-btn" onClick={() => onEdit(product.id)}>
               Editar
+            </button>
+            <button type="button" className="text-btn" disabled={busy} onClick={toggle}>
+              {available ? "Desativar" : "Ativar"}
             </button>
             <button type="button" className="text-btn danger" onClick={() => setConfirming(true)}>
               Remover
@@ -259,6 +272,7 @@ function AdminPanel() {
     saveItemType,
     removeItemType,
     removeProduct,
+    setProductActive,
     removeAccount,
     setFeaturedOrder,
   } = useCatalog();
@@ -334,6 +348,15 @@ function AdminPanel() {
   function showError(message) {
     setError(message);
     return message;
+  }
+
+  async function toggleProduct(id, active) {
+    const message = await setProductActive(id, active);
+    if (message) showError(message);
+    else {
+      setError("");
+      notify(active ? "Produto no cardápio." : "Produto fora do cardápio.");
+    }
   }
 
   function changeTab(next) {
@@ -412,7 +435,7 @@ function AdminPanel() {
           {categories.length === 0 ? (
             <p className="hint">Crie uma categoria antes de cadastrar um produto. No cadastro, ela aparece para vincular o item.</p>
           ) : (
-            <p className="hint">Toque em editar para trocar a foto, o preço, o texto ou a categoria.</p>
+            <p className="hint">Desative para tirar do cardápio sem apagar. Depois é só ativar de novo.</p>
           )}
           {categories.map((category) => {
             const items = products.filter((product) => product.category === category.id);
@@ -426,6 +449,7 @@ function AdminPanel() {
                     product={product}
                     categoryName={category.name}
                     onEdit={openProductForm}
+                    onToggle={toggleProduct}
                     onRemove={async (id) => {
                       const message = await removeProduct(id);
                       if (message) showError(message);
@@ -445,6 +469,7 @@ function AdminPanel() {
                   product={product}
                   categoryName="Sem categoria"
                   onEdit={openProductForm}
+                  onToggle={toggleProduct}
                   onRemove={async (id) => {
                     const message = await removeProduct(id);
                     if (message) showError(message);

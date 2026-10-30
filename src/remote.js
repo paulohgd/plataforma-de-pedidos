@@ -9,7 +9,7 @@ export function explain(error) {
   if (/slug/i.test(message) && /column|schema cache/i.test(message)) {
     return "Falta atualizar a base. Rode o schema.sql de novo no Supabase.";
   }
-  if (code === "PGRST205" || code === "42P01" || /schema cache/i.test(message) || /shop_secrets|paid_title|stripe_publishable|item_types/i.test(message)) {
+  if (code === "PGRST205" || code === "42P01" || /schema cache/i.test(message) || /shop_secrets|paid_title|stripe_publishable|item_types|\bactive\b/i.test(message)) {
     return "Falta atualizar a base. Rode o schema.sql de novo no Supabase.";
   }
   if (code === "23503") return "Essa categoria ainda tem produtos vinculados.";
@@ -73,6 +73,7 @@ function toStore(shop, categories, products, itemTypes) {
       image: product.image || "",
       featured: Boolean(product.featured),
       featuredRank: Number(product.featured_rank) || 0,
+      active: product.active !== false,
     })),
     itemTypes: toItemTypes(itemTypes),
   };
@@ -188,6 +189,7 @@ export async function createSeedShop(name) {
     image: product.image,
     featured: Boolean(product.featured),
     featured_rank: Number(product.featuredRank) || 0,
+    active: product.active !== false,
     position,
   }));
   let { error } = await supabase.rpc("create_store", { shop, categories, products });
@@ -323,6 +325,24 @@ function missingFeaturedRank(error) {
   return /featured_rank/i.test(message) && /column|schema cache/i.test(message);
 }
 
+function missingActive(error) {
+  const message = error?.message || "";
+  return /\bactive\b/i.test(message) && /column|schema cache|Could not find/i.test(message);
+}
+
+function withoutMissingProductColumns(row, error) {
+  let next = row;
+  if (missingFeaturedRank(error)) {
+    const { featured_rank: _rank, ...rest } = next;
+    next = rest;
+  }
+  if (missingActive(error)) {
+    const { active: _active, ...rest } = next;
+    next = rest;
+  }
+  return next;
+}
+
 export async function upsertProduct(shopId, product, position) {
   const row = {
     shop_id: shopId,
@@ -335,13 +355,18 @@ export async function upsertProduct(shopId, product, position) {
     image: product.image,
     featured: product.featured,
     featured_rank: Number(product.featuredRank) || 0,
+    active: product.active !== false,
     position,
   };
   let { error } = await supabase.from("products").upsert(row, { onConflict: "shop_id,id" });
-  if (error && missingFeaturedRank(error)) {
-    const { featured_rank: _rank, ...rest } = row;
-    ({ error } = await supabase.from("products").upsert(rest, { onConflict: "shop_id,id" }));
+  if (error && (missingFeaturedRank(error) || missingActive(error))) {
+    ({ error } = await supabase.from("products").upsert(withoutMissingProductColumns(row, error), { onConflict: "shop_id,id" }));
   }
+  return error ? explain(error) : "";
+}
+
+export async function saveProductActive(shopId, id, active) {
+  const { error } = await supabase.from("products").update({ active: Boolean(active) }).eq("shop_id", shopId).eq("id", id);
   return error ? explain(error) : "";
 }
 
