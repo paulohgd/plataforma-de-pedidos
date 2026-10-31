@@ -26,8 +26,16 @@ function replaceNamed(html, key, name, value) {
   return html;
 }
 
+export function shopPageTitle(name, { missing = false } = {}) {
+  if (missing) return "Loja não encontrada";
+  const shopName = String(name || "").trim();
+  if (!shopName) return "Pedido online";
+  if (/ \| Pedido online$/i.test(shopName)) return shopName;
+  return `${shopName} | Pedido online`;
+}
+
 export function applyShopMeta(html, shop = {}) {
-  const title = escapeHtml(String(shop.name || "Cardápio").trim() || "Cardápio");
+  const title = escapeHtml(shopPageTitle(shop.name, { missing: Boolean(shop.missing) }));
   const description = escapeHtml(
     String(shop.description || shop.hours || shop.address || "Peça pelo cardápio.").trim() || "Peça pelo cardápio.",
   );

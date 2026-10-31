@@ -61,16 +61,16 @@ export async function sendShopPage(request, response, url, supabase) {
     return;
   }
   const slug = shopSlugFromPath(url.pathname);
-  let shop = { name: "Cardápio", description: "Peça pelo cardápio." };
+  let shop = { name: "", description: "Peça pelo cardápio." };
   if (supabase && slug) {
     const { data } = await supabase.from("shops").select("name, hours, address, slug").eq("slug", slug).maybeSingle();
     if (data) {
       shop = {
-        name: data.name || "Cardápio",
+        name: data.name || "",
         description: data.hours || data.address || "Peça pelo cardápio.",
       };
     } else {
-      shop = { name: "Loja não encontrada", description: "Essa loja não existe." };
+      shop = { name: "Loja não encontrada", description: "Essa loja não existe.", missing: true };
     }
   }
   shop.url = publicUrl(request, url.pathname);

@@ -3,6 +3,7 @@ import { useCatalog } from "../catalog";
 import { money } from "../format";
 import { useCart } from "../cart";
 import { useUI } from "../router";
+import { shopPageTitle } from "../shopMeta";
 import { BottomNav, IconMenu, IconMoon, IconSearch, IconShare, IconSun, ItemLink, Thumb } from "../ui";
 
 export default function Home() {
@@ -94,7 +95,7 @@ export default function Home() {
               type="button"
               className="icon-btn"
               aria-label="Compartilhar"
-              onClick={() => share(`${window.location.origin}/loja/${shop.slug}`, shop.name)}
+              onClick={() => share(`${window.location.origin}/loja/${shop.slug}`, shopPageTitle(shop.name))}
             >
               <IconShare />
             </button>

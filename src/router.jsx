@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { useCatalog } from "./catalog";
 import { readRoute } from "./place";
+import { shopPageTitle } from "./shopMeta";
 
 const UIContext = createContext(null);
 
@@ -68,14 +69,12 @@ export function UIProvider({ children }) {
     const area = route.name === "access" || route.name === "admin" || route.name === "product-form";
     const title =
       route.name === "stores"
-        ? "Lojas"
+        ? "Lojas | Pedido online"
         : route.name === "paid"
           ? "Pedido pago"
           : area
             ? "Área da loja"
-            : missing
-              ? "Loja não encontrada"
-              : shop.name || "Cardápio";
+            : shopPageTitle(shop.name, { missing });
     document.title = title;
     const description = missing
       ? "Loja não encontrada."
@@ -120,7 +119,7 @@ export function UIProvider({ children }) {
   async function share(url, title) {
     try {
       if (navigator.share) {
-        await navigator.share({ title, url });
+        await navigator.share({ title, text: title, url });
         return;
       }
     } catch (error) {
