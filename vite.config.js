@@ -13,11 +13,14 @@ async function fetchShops(env, slug = "") {
   const key = env.VITE_SUPABASE_ANON_KEY;
   if (!url || !key) return [];
   const query = new URL(`${url}/rest/v1/shops`);
-  query.searchParams.set("select", "name,slug,hours,address");
+  query.searchParams.set("select", "name,slug,hours,address,logo");
   if (slug) query.searchParams.set("slug", `eq.${slug}`);
-  const response = await fetch(query, {
-    headers: { apikey: key, Authorization: `Bearer ${key}` },
-  });
+  const headers = { apikey: key, Authorization: `Bearer ${key}` };
+  let response = await fetch(query, { headers });
+  if (!response.ok) {
+    query.searchParams.set("select", "name,slug,hours,address");
+    response = await fetch(query, { headers });
+  }
   if (!response.ok) return [];
   const rows = await response.json();
   return Array.isArray(rows) ? rows.filter((row) => row?.slug && row?.name) : [];
@@ -28,6 +31,7 @@ function shopMetaFrom(shop, env) {
     name: shop.name,
     description: shop.hours || shop.address || "Peça pelo cardápio.",
     url: `${shopOrigin(env)}/loja/${encodeURIComponent(shop.slug)}`,
+    logo: shop.logo || "",
   };
 }
 

@@ -26,6 +26,10 @@ function replaceNamed(html, key, name, value) {
   return html;
 }
 
+function replaceLinkHref(html, rel, href) {
+  return html.replace(new RegExp(`(<link[^>]+rel="${rel}"[^>]*href=")[^"]*(")`, "gi"), `$1${href}$2`);
+}
+
 export function shopPageTitle(name, { missing = false } = {}) {
   if (missing) return "Loja não encontrada";
   const shopName = String(name || "").trim();
@@ -44,5 +48,12 @@ export function applyShopMeta(html, shop = {}) {
   next = replaceNamed(next, "property", "og:description", description);
   next = replaceNamed(next, "name", "description", description);
   if (shop.url) next = replaceNamed(next, "property", "og:url", escapeHtml(shop.url));
+  const logo = String(shop.logo || "").trim();
+  if (/^https?:\/\//i.test(logo)) {
+    const icon = escapeHtml(logo);
+    next = replaceNamed(next, "property", "og:image", icon);
+    next = replaceLinkHref(next, "icon", icon);
+    next = replaceLinkHref(next, "apple-touch-icon", icon);
+  }
   return next;
 }

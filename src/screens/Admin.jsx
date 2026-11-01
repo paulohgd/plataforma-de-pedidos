@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { paidMessage, paidTitle } from "../config";
 import { useCatalog } from "../catalog";
 import { formatPhone, money, saoPauloDayBounds, slugify } from "../format";
+import { fileToLogo } from "../images";
 import { PaidCopy } from "../PaidCopy";
 import { fetchShopOrders, fetchShopSecretStatus } from "../remote";
 import { useUI } from "../router";
@@ -420,6 +421,8 @@ function AdminPanel() {
   const [orderPage, setOrderPage] = useState(1);
   const [confirmAccount, setConfirmAccount] = useState(false);
   const [secretsSaved, setSecretsSaved] = useState({ stripe: false, discord: false });
+  const logoFile = useRef(null);
+  const [logoBusy, setLogoBusy] = useState(false);
   const [shopForm, setShopForm] = useState({
     name: shop.name,
     whatsapp: shop.whatsapp,
@@ -433,6 +436,7 @@ function AdminPanel() {
     discordWebhookUrl: "",
     paidTitle: shop.paidTitle || paidTitle,
     paidMessage: shop.paidMessage || paidMessage,
+    logo: shop.logo || "",
   });
 
   useEffect(() => {
@@ -453,6 +457,7 @@ function AdminPanel() {
       discordWebhookUrl: "",
       paidTitle: shop.paidTitle || paidTitle,
       paidMessage: shop.paidMessage || paidMessage,
+      logo: shop.logo || "",
     });
   }, [shop]);
 
@@ -534,6 +539,22 @@ function AdminPanel() {
       discord: current.discord || Boolean(shopForm.discordWebhookUrl.trim()),
     }));
     notify("Dados da loja salvos.");
+  }
+
+  async function onLogoFile(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setError("");
+    setLogoBusy(true);
+    try {
+      const logo = await fileToLogo(file);
+      setShopForm((current) => ({ ...current, logo }));
+    } catch (failure) {
+      showError(failure.message || "Não foi possível usar essa imagem.");
+    } finally {
+      setLogoBusy(false);
+    }
   }
 
   const loose = products.filter((product) => !categories.some((category) => category.id === product.category));
@@ -782,6 +803,21 @@ function AdminPanel() {
             <input value={shopForm.name} maxLength={60} onChange={(event) => setShopForm({ ...shopForm, name: event.target.value })} />
           </label>
           <p className="hint">Cardápio público: /loja/{slugify(shopForm.name)}</p>
+          <div className="image-row">
+            <Thumb src={shopForm.logo} className="shop-logo-preview" />
+            <div className="image-actions">
+              <button type="button" className="ghost" onClick={() => logoFile.current?.click()} disabled={logoBusy}>
+                {logoBusy ? "Lendo imagem…" : shopForm.logo ? "Trocar logo" : "Adicionar logo"}
+              </button>
+              {shopForm.logo ? (
+                <button type="button" className="ghost" onClick={() => setShopForm({ ...shopForm, logo: "" })}>
+                  Remover logo
+                </button>
+              ) : null}
+            </div>
+          </div>
+          <input ref={logoFile} className="file-input" tabIndex={-1} type="file" accept="image/*" onChange={onLogoFile} />
+          <p className="hint">Essa imagem aparece no ícone da aba e no cardápio.</p>
           <label>
             WhatsApp
             <input

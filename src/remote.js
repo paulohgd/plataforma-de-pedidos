@@ -9,7 +9,7 @@ export function explain(error) {
   if (/slug/i.test(message) && /column|schema cache/i.test(message)) {
     return "Falta atualizar a base. Rode o schema.sql de novo no Supabase.";
   }
-  if (code === "PGRST205" || code === "42P01" || /schema cache/i.test(message) || /shop_secrets|paid_title|stripe_publishable|item_types|\bactive\b/i.test(message)) {
+  if (code === "PGRST205" || code === "42P01" || /schema cache/i.test(message) || /shop_secrets|paid_title|stripe_publishable|item_types|\bactive\b|\blogo\b/i.test(message)) {
     return "Falta atualizar a base. Rode o schema.sql de novo no Supabase.";
   }
   if (code === "23503") return "Essa categoria ainda tem produtos vinculados.";
@@ -61,6 +61,7 @@ function toStore(shop, categories, products, itemTypes) {
       stripePublishableKey: shop.stripe_publishable_key || "",
       paidTitle: shop.paid_title || paidTitle,
       paidMessage: shop.paid_message || paidMessage,
+      logo: shop.logo || "",
     },
     categories: (categories || []).map((category) => ({ id: category.id, name: category.name })),
     products: (products || []).map((product) => ({
@@ -90,6 +91,7 @@ function toSummary(shop) {
     open: shop.is_open !== false,
     openLabel: shop.open_label || defaultShop.openLabel,
     closedLabel: shop.closed_label || defaultShop.closedLabel,
+    logo: shop.logo || "",
   };
 }
 
@@ -282,6 +284,7 @@ export async function saveShopRow(shopId, shop) {
     stripe_publishable_key: shop.stripePublishableKey || "",
     paid_title: shop.paidTitle || paidTitle,
     paid_message: shop.paidMessage || paidMessage,
+    logo: shop.logo || "",
   };
   let { error } = await supabase.from("shops").update({ ...fields, slug: shop.slug }).eq("id", shopId);
   if (error && missingSlugColumn(error)) {
@@ -472,6 +475,18 @@ export async function upsertItemType(shopId, type, position) {
 export async function deleteItemType(shopId, id) {
   const { error } = await supabase.from("item_types").delete().eq("shop_id", shopId).eq("id", id);
   return error ? explain(error) : "";
+}
+
+export async function uploadShopLogo(userId, dataUrl) {
+  const blob = dataUrlToBlob(dataUrl);
+  const path = `${userId}/logo.png`;
+  const { error } = await supabase.storage.from("products").upload(path, blob, {
+    upsert: true,
+    contentType: blob.type || "image/png",
+  });
+  if (error) return { error: explain(error), url: "" };
+  const { data } = supabase.storage.from("products").getPublicUrl(path);
+  return { error: "", url: `${data.publicUrl}?v=${Date.now()}` };
 }
 
 export async function uploadProductImage(userId, productId, dataUrl) {

@@ -63,11 +63,12 @@ export async function sendShopPage(request, response, url, supabase) {
   const slug = shopSlugFromPath(url.pathname);
   let shop = { name: "", description: "Peça pelo cardápio." };
   if (supabase && slug) {
-    const { data } = await supabase.from("shops").select("name, hours, address, slug").eq("slug", slug).maybeSingle();
+    const { data } = await supabase.from("shops").select("name, hours, address, slug, logo").eq("slug", slug).maybeSingle();
     if (data) {
       shop = {
         name: data.name || "",
         description: data.hours || data.address || "Peça pelo cardápio.",
+        logo: data.logo || "",
       };
     } else {
       shop = { name: "Loja não encontrada", description: "Essa loja não existe.", missing: true };

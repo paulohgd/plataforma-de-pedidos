@@ -83,7 +83,10 @@ export default function Home() {
     <>
       <header className="store-top">
         <div className="brand">
-          <h1>{shop.name}</h1>
+          <div className="brand-name">
+            {shop.logo ? <Thumb src={shop.logo} className="brand-logo" /> : null}
+            <h1>{shop.name}</h1>
+          </div>
           <div className="actions">
             <button type="button" className="icon-btn" aria-label="Buscar" onClick={openSearch}>
               <IconSearch />

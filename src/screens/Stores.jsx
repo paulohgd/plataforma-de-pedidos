@@ -1,5 +1,6 @@
 import { useCatalog } from "../catalog";
 import { useUI } from "../router";
+import { Thumb } from "../ui";
 
 export default function Stores() {
   const { stores, listed, remoteError } = useCatalog();
@@ -19,8 +20,11 @@ export default function Stores() {
       <div className="shop-list">
         {stores.map((shop) => (
           <button key={shop.slug} type="button" className="shop-link" onClick={() => openShop(shop.slug)}>
-            <strong>{shop.name}</strong>
-            <span>{shop.open ? shop.openLabel : shop.closedLabel}</span>
+            {shop.logo ? <Thumb src={shop.logo} className="shop-logo" /> : null}
+            <span className="shop-link-copy">
+              <strong>{shop.name}</strong>
+              <span>{shop.open ? shop.openLabel : shop.closedLabel}</span>
+            </span>
           </button>
         ))}
       </div>

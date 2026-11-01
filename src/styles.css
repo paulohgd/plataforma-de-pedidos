@@ -92,10 +92,36 @@ h1, h2, h3 { line-height: 1.2; }
   padding: 12px 6px 4px 16px;
 }
 
+.brand-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.brand-name h1,
 .brand h1 {
   margin: 0;
   font-size: 18px;
   font-weight: 700;
+}
+
+.brand-logo,
+.shop-logo-preview,
+.shop-logo {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  object-fit: contain;
+  flex: none;
+  background-color: var(--photo);
+}
+
+.shop-logo-preview,
+.shop-logo-preview.thumb-empty {
+  width: 72px;
+  height: 72px;
+  border-radius: 16px;
 }
 
 .actions { display: flex; }
@@ -1389,8 +1415,9 @@ h1, h2, h3 { line-height: 1.2; }
 
 .shop-link {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
   width: 100%;
   text-align: left;
   background: var(--card);
@@ -1399,7 +1426,14 @@ h1, h2, h3 { line-height: 1.2; }
   padding: 16px;
 }
 
-.shop-link span {
+.shop-link-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.shop-link-copy > span {
   color: var(--muted);
   font-size: 13px;
 }

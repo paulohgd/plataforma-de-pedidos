@@ -22,6 +22,7 @@ import {
   saveShopSecrets,
   updateCategoryName,
   uploadProductImage,
+  uploadShopLogo,
   upsertItemType,
   upsertProduct,
 } from "./remote";
@@ -45,6 +46,7 @@ function blankStore() {
       stripePublishableKey: "",
       paidTitle,
       paidMessage,
+      logo: "",
     },
     categories: [],
     products: [],
@@ -65,6 +67,7 @@ function cleanShop(shop) {
     stripePublishableKey: String(source.stripePublishableKey || "").trim(),
     paidTitle: String(source.paidTitle || paidTitle).trim().slice(0, 80) || paidTitle,
     paidMessage: String(source.paidMessage || paidMessage).trim().slice(0, 800) || paidMessage,
+    logo: String(source.logo || "").trim(),
   };
 }
 
@@ -429,7 +432,17 @@ export function CatalogProvider({ children }) {
       if (publishable && !/^pk_/.test(publishable)) {
         return "A chave publicável da Stripe deve começar com pk_.";
       }
-      const nextShop = cleanShop({ ...store.shop, ...shop, whatsapp: digits, stripePublishableKey: publishable });
+      let logo = String(shop.logo || "").trim();
+      if (logo && !logo.startsWith("data:image/") && !/^https?:\/\//i.test(logo)) {
+        return "Use uma imagem do aparelho para a logo.";
+      }
+      if (logo.startsWith("data:") && logo.length > 1_500_000) return "A logo ficou grande demais. Escolha outra imagem.";
+      if (logo.startsWith("data:image/")) {
+        const uploaded = await uploadShopLogo(account.id, logo);
+        if (uploaded.error) return uploaded.error;
+        logo = uploaded.url;
+      }
+      const nextShop = cleanShop({ ...store.shop, ...shop, whatsapp: digits, stripePublishableKey: publishable, logo });
       nextShop.slug = slugify(nextShop.name);
       const error = await saveShopRow(store.shopId, nextShop);
       if (error) return error;
@@ -444,7 +457,7 @@ export function CatalogProvider({ children }) {
       setStore(nextStore);
       return "";
     },
-    [deny, store.shop, store.shopId],
+    [account, deny, store.shop, store.shopId],
   );
 
   const addCategory = useCallback(

@@ -35,6 +35,7 @@ alter table public.shops add column if not exists paid_title text not null defau
 alter table public.shops add column if not exists paid_message text not null default 'Recebemos seu pedido e ele já está sendo preparado! O prazo médio de preparação é de **1 hora**.
 
 Agradecemos pela preferência! 😊';
+alter table public.shops add column if not exists logo text not null default '';
 
 create table if not exists public.shop_secrets (
   shop_id uuid primary key references public.shops (id) on delete cascade,

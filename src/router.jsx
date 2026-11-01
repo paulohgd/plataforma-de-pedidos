@@ -83,7 +83,13 @@ export function UIProvider({ children }) {
     setMeta("property", "og:title", title);
     setMeta("property", "og:description", description);
     setMeta("property", "og:url", window.location.href);
-  }, [route.name, shop.name, shop.hours, shop.address, missing]);
+    const logo = !missing && /^https?:\/\//i.test(String(shop.logo || "").trim()) ? shop.logo.trim() : "";
+    setMeta("property", "og:image", logo);
+    document.querySelectorAll('link[rel="icon"], link[rel="apple-touch-icon"]').forEach((link) => {
+      if (!link.dataset.defaultHref) link.dataset.defaultHref = link.getAttribute("href") || "";
+      link.setAttribute("href", logo || link.dataset.defaultHref);
+    });
+  }, [route.name, shop.name, shop.hours, shop.address, shop.logo, missing]);
 
   useEffect(() => () => clearTimeout(toastTimer.current), []);
 
