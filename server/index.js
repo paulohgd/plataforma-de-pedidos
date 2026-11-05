@@ -5,9 +5,11 @@ import WebSocket from "ws";
 import { createClient } from "@supabase/supabase-js";
 import { paidMessage, paidTitle } from "../src/config.js";
 import { checkoutEmail, fullPhone, validPhone } from "../src/format.js";
-import { buildOrderText, paymentKindFromStripe } from "../src/order.js";
+import { formatKm } from "../src/freight.js";
+import { buildOrderText, paymentKindFromStripe, whatsappOrderUrl } from "../src/order.js";
 import { cents, quoteCart } from "./quote.js";
 import { sendShopDiscord } from "./discord.js";
+import { quoteDelivery } from "./freight.js";
 import { isShopPage, sendShopPage } from "./shopPage.js";
 import { allowedOrigin, publicError, readBody, readJson, securityHeaders, tooMany } from "./security.js";
 
@@ -66,6 +68,7 @@ async function loadShop(slug) {
       name: shop.name,
       slug: shop.slug,
       whatsapp: shop.whatsapp || "",
+      address: shop.address || "",
       open: shop.is_open !== false,
       stripePublishableKey: shop.stripe_publishable_key || "",
       paidTitle: shop.paid_title || paidTitle,
@@ -135,6 +138,10 @@ function orderTextFromRow(shop, order, payment) {
     total: Number(order.total || 0),
     paid: true,
     payment,
+    delivery:
+      order.customer_mode === "entrega" && order.delivery_km != null
+        ? { km: Number(order.delivery_km), fee: Number(order.delivery_fee) || 0 }
+        : null,
   });
 }
 
@@ -275,12 +282,41 @@ async function createCheckout(request, response) {
     return;
   }
 
+  let delivery = null;
+  if (mode === "entrega") {
+    delivery = await quoteDelivery(store.shop.address, address);
+    if (delivery.error) {
+      json(response, 400, { error: delivery.error });
+      return;
+    }
+  }
+
+  const payTotal = Number((quoted.total + (delivery?.fee || 0)).toFixed(2));
+  const items = quoted.lines.map((line) => ({
+    productId: line.productId,
+    name: line.name,
+    qty: line.qty,
+    note: line.note,
+    options: line.options,
+    total: line.total,
+  }));
+  if (delivery) {
+    items.push({
+      name: delivery.fee > 0 ? `Entrega (${formatKm(delivery.km)})` : `Entrega grátis (${formatKm(delivery.km)})`,
+      qty: 1,
+      note: "",
+      options: [],
+      total: delivery.fee,
+    });
+  }
+
   const text = buildOrderText({
     shop: store.shop,
     customer: { name, whatsapp, mode, address, notes },
     lines: quoted.lines,
-    total: quoted.total,
+    total: payTotal,
     paid: true,
+    delivery,
   });
 
   const orderRow = {
@@ -291,21 +327,20 @@ async function createCheckout(request, response) {
     customer_mode: mode,
     customer_address: address.slice(0, 160),
     customer_notes: notes,
-    items: quoted.lines.map((line) => ({
-      productId: line.productId,
-      name: line.name,
-      qty: line.qty,
-      note: line.note,
-      options: line.options,
-      total: line.total,
-    })),
-    total: quoted.total,
+    items,
+    total: payTotal,
+    delivery_km: delivery ? delivery.km : null,
+    delivery_fee: delivery ? delivery.fee : 0,
     whatsapp_text: text,
   };
 
   let { data: order, error: orderError } = await supabase.from("orders").insert(orderRow).select("*").single();
   if (orderError && /customer_whatsapp/i.test(orderError.message || "")) {
     const { customer_whatsapp: _phone, ...rest } = orderRow;
+    ({ data: order, error: orderError } = await supabase.from("orders").insert(rest).select("*").single());
+  }
+  if (orderError && /delivery_/i.test(orderError.message || "")) {
+    const { delivery_km: _km, delivery_fee: _fee, ...rest } = orderRow;
     ({ data: order, error: orderError } = await supabase.from("orders").insert(rest).select("*").single());
   }
   if (orderError) {
@@ -337,17 +372,31 @@ async function createCheckout(request, response) {
       payment_intent_data: {
         metadata: orderMeta,
       },
-      line_items: quoted.lines.map((line) => ({
-        quantity: line.qty,
-        price_data: {
-          currency: "brl",
-          unit_amount: cents(line.unit),
-          product_data: {
-            name: line.name,
-            description: line.options.map((option) => option.name).join(", ").slice(0, 500) || undefined,
+      line_items: [
+        ...quoted.lines.map((line) => ({
+          quantity: line.qty,
+          price_data: {
+            currency: "brl",
+            unit_amount: cents(line.unit),
+            product_data: {
+              name: line.name,
+              description: line.options.map((option) => option.name).join(", ").slice(0, 500) || undefined,
+            },
           },
-        },
-      })),
+        })),
+        ...(delivery?.fee
+          ? [
+              {
+                quantity: 1,
+                price_data: {
+                  currency: "brl",
+                  unit_amount: cents(delivery.fee),
+                  product_data: { name: `Entrega (${formatKm(delivery.km)})` },
+                },
+              },
+            ]
+          : []),
+      ],
     });
 
     await supabase.from("orders").update({ stripe_session_id: session.id }).eq("id", order.id);
@@ -360,9 +409,9 @@ async function createCheckout(request, response) {
 }
 
 async function shopCopy(shopId) {
-  const withCopy = await supabase.from("shops").select("name, slug, paid_title, paid_message").eq("id", shopId).maybeSingle();
+  const withCopy = await supabase.from("shops").select("name, slug, paid_title, paid_message, whatsapp").eq("id", shopId).maybeSingle();
   if (!withCopy.error) return withCopy.data;
-  return (await supabase.from("shops").select("name, slug").eq("id", shopId).maybeSingle()).data;
+  return (await supabase.from("shops").select("name, slug, whatsapp").eq("id", shopId).maybeSingle()).data;
 }
 
 async function readSession(request, response) {
@@ -389,11 +438,38 @@ async function readSession(request, response) {
   const order = await settleOrder(existing, client);
   const shop = await shopCopy(order.shop_id);
   const paid = order.status === "paid";
+  const text = paid ? order.whatsapp_text || orderTextFromRow(shop, order) : "";
   json(response, 200, {
     paid,
     paidTitle: shop?.paid_title || paidTitle,
     paidMessage: shop?.paid_message || paidMessage,
+    whatsappUrl: paid ? whatsappOrderUrl(shop, text) : "",
   });
+}
+
+async function quoteDeliveryRoute(request, response) {
+  if (!supabase) {
+    json(response, 503, { error: "Pagamento ainda não está configurado no servidor." });
+    return;
+  }
+  if (tooMany(request, 20, 5 * 60 * 1000)) {
+    json(response, 429, { error: "Muitas tentativas. Espere um pouco e tente de novo." });
+    return;
+  }
+  const payload = await readJson(request, 4096);
+  const slug = String(payload.slug || "").trim();
+  const address = String(payload.address || "").trim();
+  const store = await loadShop(slug);
+  if (!store) {
+    json(response, 404, { error: "Loja não encontrada." });
+    return;
+  }
+  const quote = await quoteDelivery(store.shop.address, address);
+  if (quote.error) {
+    json(response, 400, { error: quote.error });
+    return;
+  }
+  json(response, 200, quote);
 }
 
 const PIX_SECONDS = 15 * 60;
@@ -580,6 +656,10 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.method === "POST" && url.pathname === "/api/create-pix") {
       await createPix(request, response);
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/quote-delivery") {
+      await quoteDeliveryRoute(request, response);
       return;
     }
     if (request.method === "POST" && url.pathname === "/api/stripe-webhook") {

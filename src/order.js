@@ -1,4 +1,5 @@
 import { formatPhone, money } from "./format.js";
+import { formatKm } from "./freight.js";
 
 export function shopWhatsapp(shop) {
   return String(shop?.whatsapp || "").replace(/\D/g, "");
@@ -31,7 +32,7 @@ export function withPaidPayment(text, kind = "card") {
   return `${source.trim()}\n${line}`;
 }
 
-export function buildOrderText({ shop, customer, lines, total, paid = false, payment = "card" }) {
+export function buildOrderText({ shop, customer, lines, total, paid = false, payment = "card", delivery = null }) {
   const out = [
     paid ? `*${shop.name} — pedido pago*` : `*${shop.name} — novo pedido*`,
     "",
@@ -42,6 +43,10 @@ export function buildOrderText({ shop, customer, lines, total, paid = false, pay
 
   if (customer.mode === "entrega") {
     out.push(`*Endereço:* ${customer.address.trim()}`);
+    if (delivery && Number.isFinite(Number(delivery.km))) {
+      out.push(`*Distância:* ${formatKm(delivery.km)}`);
+      out.push(`*Entrega:* ${Number(delivery.fee) > 0 ? money(delivery.fee) : "grátis"}`);
+    }
   }
 
   out.push("", "*Itens*");
@@ -62,17 +67,18 @@ export function buildOrderText({ shop, customer, lines, total, paid = false, pay
     out.push("", `*Observações:* ${customer.notes.trim()}`);
   }
 
-  if (customer.mode === "entrega") {
-    out.push("", "_A taxa de entrega é combinada nesta conversa._");
-  }
-
   return out.join("\n");
 }
 
-export function openWhatsApp(shop, text) {
+export function whatsappOrderUrl(shop, text) {
   const digits = shopWhatsapp(shop);
-  if (digits.length < 12) return false;
-  const url = `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
+  if (digits.length < 12 || !String(text || "").trim()) return "";
+  return `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
+}
+
+export function openWhatsApp(shop, text) {
+  const url = whatsappOrderUrl(shop, text);
+  if (!url) return false;
   const opened = window.open(url, "_blank", "noopener,noreferrer");
   if (!opened) window.location.href = url;
   return true;

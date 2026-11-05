@@ -340,7 +340,7 @@ function FeaturedEditor({ products, featured, onSave, onError, notify }) {
   );
 }
 
-function ProductRow({ product, categoryName, onEdit, onRemove, onToggle }) {
+function ProductRow({ product, categoryName, index, total, onEdit, onRemove, onToggle, onMove }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const available = product.active !== false;
@@ -361,6 +361,14 @@ function ProductRow({ product, categoryName, onEdit, onRemove, onToggle }) {
           {categoryName} · {money(product.price)}
           {available ? "" : " · Fora do cardápio"}
         </p>
+        <div className="featured-actions">
+          <button type="button" className="text-btn" disabled={!onMove || index === 0} onClick={() => onMove(index, -1)}>
+            Subir
+          </button>
+          <button type="button" className="text-btn" disabled={!onMove || index === total - 1} onClick={() => onMove(index, 1)}>
+            Descer
+          </button>
+        </div>
         {confirming ? (
           <div className="confirm-row">
             <span>Remover este produto?</span>
@@ -408,6 +416,7 @@ function AdminPanel() {
     removeItemType,
     removeProduct,
     setProductActive,
+    setProductOrder,
     removeAccount,
     setFeaturedOrder,
   } = useCatalog();
@@ -603,7 +612,7 @@ function AdminPanel() {
           {categories.length === 0 ? (
             <p className="hint">Crie uma categoria antes de cadastrar um produto. No cadastro, ela aparece para vincular o item.</p>
           ) : (
-            <p className="hint">Desative para tirar do cardápio sem apagar. Depois é só ativar de novo.</p>
+            <p className="hint">Desative para tirar do cardápio sem apagar. Use Subir e Descer para mudar a ordem na categoria.</p>
           )}
           {categories.map((category) => {
             const items = products.filter((product) => product.category === category.id);
@@ -611,13 +620,24 @@ function AdminPanel() {
               <section key={category.id}>
                 <h2 className="block-title">{category.name}</h2>
                 {items.length === 0 ? <p className="empty-inline">Nenhum produto nesta categoria.</p> : null}
-                {items.map((product) => (
+                {items.map((product, index) => (
                   <ProductRow
                     key={product.id}
                     product={product}
                     categoryName={category.name}
+                    index={index}
+                    total={items.length}
                     onEdit={openProductForm}
                     onToggle={toggleProduct}
+                    onMove={async (from, step) => {
+                      const to = from + step;
+                      if (to < 0 || to >= items.length) return;
+                      const next = items.map((item) => item.id);
+                      [next[from], next[to]] = [next[to], next[from]];
+                      const message = await setProductOrder(category.id, next);
+                      if (message) showError(message);
+                      else setError("");
+                    }}
                     onRemove={async (id) => {
                       const message = await removeProduct(id);
                       if (message) showError(message);
@@ -636,6 +656,8 @@ function AdminPanel() {
                   key={product.id}
                   product={product}
                   categoryName="Sem categoria"
+                  index={0}
+                  total={1}
                   onEdit={openProductForm}
                   onToggle={toggleProduct}
                   onRemove={async (id) => {

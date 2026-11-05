@@ -19,6 +19,10 @@ function customerFields(order = {}) {
   ];
   if (order.customer_mode === "entrega") {
     fields.push(field("Endereço", order.customer_address, false));
+    if (order.delivery_km != null && order.delivery_km !== "") {
+      const fee = Number(order.delivery_fee);
+      fields.push(field("Entrega", fee > 0 ? `R$ ${fee.toFixed(2).replace(".", ",")} · ${order.delivery_km} km` : `Grátis · ${order.delivery_km} km`));
+    }
   }
   if (order.customer_notes) {
     fields.push(field("Observações", order.customer_notes, false));

@@ -9,7 +9,13 @@ import { PageHead } from "../ui";
 export default function Paid() {
   const { goHome, route } = useUI();
   const { clear } = useCart();
-  const [state, setState] = useState({ status: "loading", error: "", title: paidTitle, message: paidMessage });
+  const [state, setState] = useState({
+    status: "loading",
+    error: "",
+    title: paidTitle,
+    message: paidMessage,
+    whatsappUrl: "",
+  });
   const cleared = useRef(false);
 
   useEffect(() => {
@@ -26,6 +32,7 @@ export default function Paid() {
         error: "Não encontramos a sessão deste pagamento. Se o valor foi cobrado, o pedido já chegou na loja.",
         title: paidTitle,
         message: paidMessage,
+        whatsappUrl: "",
       });
       return;
     }
@@ -46,6 +53,7 @@ export default function Paid() {
               error: "",
               title: payload.paidTitle || paidTitle,
               message: payload.paidMessage || paidMessage,
+              whatsappUrl: payload.whatsappUrl || "",
             });
             return;
           }
@@ -60,6 +68,7 @@ export default function Paid() {
           error: "O pagamento ainda não foi confirmado. Se o valor foi cobrado, aguarde um instante e atualize a página.",
           title: paidTitle,
           message: paidMessage,
+          whatsappUrl: "",
         });
       }
     }
@@ -86,7 +95,12 @@ export default function Paid() {
         {state.status === "paid" ? (
           <>
             <PaidCopy title={state.title} message={state.message} />
-            <button type="button" className="primary" onClick={goHome}>
+            {state.whatsappUrl ? (
+              <a className="primary" href={state.whatsappUrl} target="_blank" rel="noopener noreferrer">
+                Enviar pedido no WhatsApp
+              </a>
+            ) : null}
+            <button type="button" className={state.whatsappUrl ? "ghost" : "primary"} onClick={goHome}>
               Voltar ao cardápio
             </button>
           </>

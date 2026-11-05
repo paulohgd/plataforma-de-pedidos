@@ -293,6 +293,16 @@ export async function saveShopRow(shopId, shop) {
   return error ? explain(error) : "";
 }
 
+export async function saveProductOrder(shopId, ids) {
+  const results = await Promise.all(
+    ids.map((id, position) =>
+      supabase.from("products").update({ position }).eq("shop_id", shopId).eq("id", id),
+    ),
+  );
+  const fail = results.find((result) => result.error);
+  return fail?.error ? explain(fail.error) : "";
+}
+
 export async function saveCategoryOrder(shopId, ids) {
   const results = await Promise.all(
     ids.map((id, position) =>

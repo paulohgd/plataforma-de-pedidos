@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { loadStripe } from "@stripe/stripe-js";
 import { useCatalog } from "../catalog";
 import { formatPhone, money, phoneDigits, validPhone } from "../format";
+import { deliveryFeeLabel } from "../freight";
 import { useCart } from "../cart";
 import { checkoutSessionId, fetchCheckoutSession, rememberCheckoutSession } from "../pay";
 import { useUI } from "../router";
@@ -33,6 +34,8 @@ export default function Checkout() {
   const [clientSecret, setClientSecret] = useState("");
   const [checkoutReady, setCheckoutReady] = useState(false);
   const [completing, setCompleting] = useState(false);
+  const [delivery, setDelivery] = useState(null);
+  const [quoting, setQuoting] = useState(false);
   const box = useRef(null);
   const walletBox = useRef(null);
   const checkoutRef = useRef(null);
@@ -43,6 +46,9 @@ export default function Checkout() {
   const waiting = !ready || (route.slug && shop.slug !== route.slug && !missing);
   const pixMsLeft = pixExpiresAt ? pixExpiresAt - now : 0;
   const pixAlive = Boolean(pixCopy) && pixMsLeft > 0;
+  const deliveryFee = customer.mode === "entrega" && delivery && !delivery.error ? Number(delivery.fee) || 0 : 0;
+  const payTotal = total + deliveryFee;
+  const deliveryReady = customer.mode !== "entrega" || Boolean(delivery && !delivery.error && !quoting);
 
   function goPaid(id = sessionId) {
     if (leaving.current) return;
@@ -185,6 +191,46 @@ export default function Checkout() {
   }, [paying, method, checkoutReady]);
 
   useEffect(() => {
+    if (customer.mode !== "entrega") {
+      setDelivery(null);
+      setQuoting(false);
+      return undefined;
+    }
+    const address = String(customer.address || "").trim();
+    if (address.length < 6 || !shop.slug) {
+      setDelivery(null);
+      setQuoting(false);
+      return undefined;
+    }
+    let cancel = false;
+    setQuoting(true);
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch("/api/quote-delivery", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ slug: shop.slug, address }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (cancel) return;
+        if (!response.ok) {
+          setDelivery({ error: payload.error || "Não foi possível calcular o frete." });
+          return;
+        }
+        setDelivery({ km: payload.km, fee: payload.fee });
+      } catch {
+        if (!cancel) setDelivery({ error: "Não foi possível calcular o frete." });
+      } finally {
+        if (!cancel) setQuoting(false);
+      }
+    }, 700);
+    return () => {
+      cancel = true;
+      clearTimeout(timer);
+    };
+  }, [customer.mode, customer.address, shop.slug]);
+
+  useEffect(() => {
     if (!pixExpiresAt) return undefined;
     setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -233,9 +279,15 @@ export default function Checkout() {
       return;
     }
     if (whatsapp !== customer.whatsapp) setCustomer({ whatsapp });
-    if (customer.mode === "entrega" && customer.address.trim().length < 6) {
-      setError("Informe o endereço da entrega.");
-      return;
+    if (customer.mode === "entrega") {
+      if (customer.address.trim().length < 6) {
+        setError("Informe o endereço da entrega.");
+        return;
+      }
+      if (quoting || !delivery || delivery.error) {
+        setError(delivery?.error || "Aguarde o cálculo do frete.");
+        return;
+      }
     }
     if (!shop.stripePublishableKey) {
       setError("Falta a chave publicável da Stripe nas configurações da loja.");
@@ -343,7 +395,7 @@ export default function Checkout() {
       ) : paying ? (
         <div className="form">
           <p className="hint">
-            {customer.name} · {formatPhone(customer.whatsapp)} · {money(total)}
+            {customer.name} · {formatPhone(customer.whatsapp)} · {money(payTotal)}
           </p>
           <div ref={walletBox} className={wallet ? "gpay-box" : "gpay-box gpay-pending"} />
           <div className="pay-tabs">
@@ -414,7 +466,7 @@ export default function Checkout() {
               <span>
                 {confirming ? "Gerando…" : method === "pix" && pixCopy && !pixAlive ? "Gerar novo código Pix" : "Pagar"}
               </span>
-              <span>{money(total)}</span>
+              <span>{money(payTotal)}</span>
             </button>
           )}
         </div>
@@ -472,16 +524,23 @@ export default function Checkout() {
           </div>
 
           {customer.mode === "entrega" ? (
-            <label>
-              Endereço
-              <input
-                value={customer.address}
-                autoComplete="street-address"
-                maxLength={160}
-                placeholder="Rua, número e bairro"
-                onChange={(event) => setCustomer({ address: event.target.value })}
-              />
-            </label>
+            <>
+              <label>
+                Endereço
+                <input
+                  value={customer.address}
+                  autoComplete="street-address"
+                  maxLength={160}
+                  placeholder="Rua, número e bairro"
+                  onChange={(event) => setCustomer({ address: event.target.value })}
+                />
+              </label>
+              {quoting ? <p className="hint">Calculando o frete…</p> : null}
+              {delivery?.error ? <p className="form-error">{delivery.error}</p> : null}
+              {delivery && !delivery.error && !quoting ? (
+                <p className="hint">Frete: até 2 km grátis · 2 a 8 km R$ 6 · 8 a 12 km R$ 10</p>
+              ) : null}
+            </>
           ) : null}
 
           <label>
@@ -505,16 +564,28 @@ export default function Checkout() {
                 <span>{money(line.total)}</span>
               </p>
             ))}
+            {customer.mode === "entrega" ? (
+              <p>
+                <span>Entrega</span>
+                <span>
+                  {quoting
+                    ? "Calculando…"
+                    : delivery && !delivery.error
+                      ? deliveryFeeLabel(delivery)
+                      : "Informe o endereço"}
+                </span>
+              </p>
+            ) : null}
             <p className="sum">
               <span>Total</span>
-              <strong>{money(total)}</strong>
+              <strong>{money(payTotal)}</strong>
             </p>
           </section>
 
           {error ? <p className="form-error">{error}</p> : null}
-          <button type="submit" className="primary" disabled={pending}>
+          <button type="submit" className="primary" disabled={pending || !deliveryReady}>
             <span>{pending ? "Abrindo pagamento…" : "Ir para o pagamento"}</span>
-            <span>{money(total)}</span>
+            <span>{money(payTotal)}</span>
           </button>
         </form>
       )}

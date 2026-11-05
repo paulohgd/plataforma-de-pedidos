@@ -18,6 +18,7 @@ import {
   saveCategoryOrder,
   saveFeaturedProducts,
   saveProductActive,
+  saveProductOrder,
   saveShopRow,
   saveShopSecrets,
   updateCategoryName,
@@ -647,6 +648,38 @@ export function CatalogProvider({ children }) {
     [deny, store.shopId],
   );
 
+  const setProductOrder = useCallback(
+    async (categoryId, orderedIds) => {
+      const denied = deny();
+      if (denied) return denied;
+      const inCategory = store.products.filter((product) => product.category === categoryId);
+      const allowed = new Set(inCategory.map((product) => product.id));
+      if (orderedIds.length !== inCategory.length || orderedIds.some((id) => !allowed.has(id))) {
+        return "Não foi possível reordenar os produtos.";
+      }
+      const byId = new Map(store.products.map((product) => [product.id, product]));
+      const next = [];
+      for (const category of store.categories) {
+        if (category.id === categoryId) {
+          for (const id of orderedIds) next.push(byId.get(id));
+        } else {
+          next.push(...store.products.filter((product) => product.category === category.id));
+        }
+      }
+      next.push(...store.products.filter((product) => !store.categories.some((category) => category.id === product.category)));
+      const ids = next.filter(Boolean).map((product) => product.id);
+      const error = await saveProductOrder(store.shopId, ids);
+      if (error) return error;
+      const ranked = new Map(ids.map((id, index) => [id, index]));
+      setStore((current) => ({
+        ...current,
+        products: current.products.slice().sort((a, b) => (ranked.get(a.id) ?? 0) - (ranked.get(b.id) ?? 0)),
+      }));
+      return "";
+    },
+    [deny, store.categories, store.products, store.shopId],
+  );
+
   const setProductActive = useCallback(
     async (id, active) => {
       const denied = deny();
@@ -731,6 +764,7 @@ export function CatalogProvider({ children }) {
     saveItemType,
     removeItemType,
     saveProduct,
+    setProductOrder,
     setProductActive,
     setFeaturedOrder,
     removeProduct,

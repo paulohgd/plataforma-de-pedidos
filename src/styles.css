@@ -849,8 +849,18 @@ h1, h2, h3 { line-height: 1.2; }
   color: var(--text);
 }
 
-.paid-box .primary {
+.paid-box .primary,
+.paid-box .ghost {
   margin-top: 16px;
+  text-decoration: none;
+  box-sizing: border-box;
+  justify-content: center;
+}
+
+.paid-box .ghost {
+  width: 100%;
+  height: 48px;
+  margin-top: 8px;
 }
 
 .admin-subtitle {
