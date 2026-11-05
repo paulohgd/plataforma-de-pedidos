@@ -1,3 +1,5 @@
+import { money } from "../src/format.js";
+import { cleanMinOrder } from "../src/freight.js";
 import { hydrateProducts } from "../src/menu.js";
 
 export function quoteCart(store, payload) {
@@ -54,7 +56,8 @@ export function quoteCart(store, payload) {
 
   if (!lines.length) return { error: "Adicione itens na sacola." };
   const total = Number(lines.reduce((sum, line) => sum + line.total, 0).toFixed(2));
-  if (total < 0.5) return { error: "O pedido mínimo é R$ 0,50." };
+  const minOrder = Math.max(0.5, cleanMinOrder(store.shop?.minOrder));
+  if (total < minOrder) return { error: `O pedido mínimo é ${money(minOrder)}.` };
   return { lines, total };
 }
 

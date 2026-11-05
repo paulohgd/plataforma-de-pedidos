@@ -103,5 +103,6 @@ export async function quoteDelivery(shop = {}, dest = {}) {
   if (!from || !to) {
     return { error: "Não encontramos esse CEP. Confira os números e tente de novo." };
   }
-  return deliveryQuoteFromKm(kmBetween(from, to));
+  const rules = typeof shop === "string" ? {} : { maxKm: shop.deliveryMaxKm, fees: shop.deliveryFees };
+  return deliveryQuoteFromKm(kmBetween(from, to), rules);
 }

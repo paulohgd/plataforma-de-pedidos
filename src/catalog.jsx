@@ -2,6 +2,7 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState, createCo
 import { authRedirectTo, clearAuthCallbackUrl, readAuthCallbackError } from "./authCallback";
 import { paidMessage, paidTitle, shop as defaultShop } from "./config";
 import { norm, slugify } from "./format";
+import { cleanDeliveryFees, cleanDeliveryMaxKm, cleanMinOrder, defaultDeliveryFees, defaultDeliveryMaxKm } from "./freight";
 import { cloneItemType, hydrateProducts, orderFeatured, seedItemTypes } from "./menu";
 import { readPlace, readRoute, singleShopRedirect } from "./place";
 import {
@@ -49,6 +50,9 @@ function blankStore() {
       paidTitle,
       paidMessage,
       logo: "",
+      minOrder: 0,
+      deliveryMaxKm: defaultDeliveryMaxKm,
+      deliveryFees: defaultDeliveryFees.map((row) => ({ ...row })),
     },
     categories: [],
     products: [],
@@ -71,6 +75,9 @@ function cleanShop(shop) {
     paidTitle: String(source.paidTitle || paidTitle).trim().slice(0, 80) || paidTitle,
     paidMessage: String(source.paidMessage || paidMessage).trim().slice(0, 800) || paidMessage,
     logo: String(source.logo || "").trim(),
+    minOrder: cleanMinOrder(source.minOrder),
+    deliveryMaxKm: cleanDeliveryMaxKm(source.deliveryMaxKm),
+    deliveryFees: cleanDeliveryFees(source.deliveryFees?.length ? source.deliveryFees : defaultDeliveryFees),
   };
 }
 

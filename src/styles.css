@@ -979,6 +979,15 @@ h1, h2, h3 { line-height: 1.2; }
   gap: 10px;
 }
 
+.fee-row {
+  grid-template-columns: 1fr 1fr auto;
+  align-items: end;
+}
+
+.fee-remove {
+  margin-bottom: 10px;
+}
+
 .choices {
   border-radius: 12px;
   overflow: hidden;

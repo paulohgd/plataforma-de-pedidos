@@ -37,6 +37,9 @@ alter table public.shops add column if not exists paid_message text not null def
 Agradecemos pela preferência! 😊';
 alter table public.shops add column if not exists logo text not null default '';
 alter table public.shops add column if not exists cep text not null default '';
+alter table public.shops add column if not exists min_order numeric(10, 2) not null default 0;
+alter table public.shops add column if not exists delivery_max_km numeric(6, 1) not null default 10;
+alter table public.shops add column if not exists delivery_fees jsonb not null default '[{"upTo":3,"fee":0},{"upTo":7,"fee":8},{"upTo":10,"fee":12}]'::jsonb;
 
 create table if not exists public.shop_secrets (
   shop_id uuid primary key references public.shops (id) on delete cascade,

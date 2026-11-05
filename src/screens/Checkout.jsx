@@ -3,7 +3,7 @@ import { loadStripe } from "@stripe/stripe-js";
 import { useCatalog } from "../catalog";
 import { cepDigits, composeAddress, formatCep, lookupCep } from "../cep";
 import { formatPhone, money, phoneDigits, validPhone } from "../format";
-import { deliveryFeeLabel } from "../freight";
+import { cleanMinOrder, deliveryFeeLabel, deliveryRulesHint } from "../freight";
 import { useCart } from "../cart";
 import { checkoutSessionId, fetchCheckoutSession, rememberCheckoutSession } from "../pay";
 import { useUI } from "../router";
@@ -332,6 +332,11 @@ export default function Checkout() {
       setError("A loja está fechada no momento.");
       return;
     }
+    const minOrder = Math.max(0.5, cleanMinOrder(shop.minOrder));
+    if (total < minOrder) {
+      setError(`O pedido mínimo é ${money(minOrder)}.`);
+      return;
+    }
     const name = String(customer.name || "").trim();
     const whatsapp = phoneDigits(whatsappBox.current?.value || customer.whatsapp);
     if (name.length < 2) {
@@ -645,11 +650,9 @@ export default function Checkout() {
                 </p>
               ) : null}
               {cepError ? <p className="form-error">{cepError}</p> : null}
+              <p className="hint">{deliveryRulesHint(shop)}</p>
               {quoting ? <p className="hint">Calculando o frete…</p> : null}
               {delivery?.error ? <p className="form-error">{delivery.error}</p> : null}
-              {delivery && !delivery.error && !quoting ? (
-                <p className="hint">Frete: até 2 km grátis · 2 a 8 km R$ 6 · 8 a 12 km R$ 10</p>
-              ) : null}
             </>
           ) : null}
 
@@ -690,6 +693,9 @@ export default function Checkout() {
               <span>Total</span>
               <strong>{money(payTotal)}</strong>
             </p>
+            {cleanMinOrder(shop.minOrder) > 0 ? (
+              <p className="hint">Pedido mínimo: {money(Math.max(0.5, cleanMinOrder(shop.minOrder)))}</p>
+            ) : null}
           </section>
 
           {error ? <p className="form-error">{error}</p> : null}

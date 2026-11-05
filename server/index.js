@@ -74,6 +74,9 @@ async function loadShop(slug) {
       stripePublishableKey: shop.stripe_publishable_key || "",
       paidTitle: shop.paid_title || paidTitle,
       paidMessage: shop.paid_message || paidMessage,
+      minOrder: shop.min_order,
+      deliveryMaxKm: shop.delivery_max_km,
+      deliveryFees: shop.delivery_fees,
     },
     products: (products || []).map((product) => ({
       id: product.id,

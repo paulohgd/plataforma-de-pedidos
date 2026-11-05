@@ -3,6 +3,7 @@ import { paidMessage, paidTitle } from "../config";
 import { useCatalog } from "../catalog";
 import { formatPhone, money, saoPauloDayBounds, slugify } from "../format";
 import { cepDigits, composeAddress, formatCep, lookupCep } from "../cep";
+import { cleanDeliveryFees, defaultDeliveryMaxKm } from "../freight";
 import { fileToLogo } from "../images";
 import { PaidCopy } from "../PaidCopy";
 import { fetchShopOrders, fetchShopSecretStatus } from "../remote";
@@ -448,6 +449,9 @@ function AdminPanel() {
     paidTitle: shop.paidTitle || paidTitle,
     paidMessage: shop.paidMessage || paidMessage,
     logo: shop.logo || "",
+    minOrder: shop.minOrder ?? 0,
+    deliveryMaxKm: shop.deliveryMaxKm ?? defaultDeliveryMaxKm,
+    deliveryFees: cleanDeliveryFees(shop.deliveryFees),
   });
 
   useEffect(() => {
@@ -470,6 +474,9 @@ function AdminPanel() {
       paidTitle: shop.paidTitle || paidTitle,
       paidMessage: shop.paidMessage || paidMessage,
       logo: shop.logo || "",
+      minOrder: shop.minOrder ?? 0,
+      deliveryMaxKm: shop.deliveryMaxKm ?? defaultDeliveryMaxKm,
+      deliveryFees: cleanDeliveryFees(shop.deliveryFees),
     });
   }, [shop]);
 
@@ -899,6 +906,86 @@ function AdminPanel() {
             />
             Aceitando pedidos agora
           </label>
+          <h3 className="admin-subtitle">Pedido e entrega</h3>
+          <label>
+            Pedido mínimo
+            <input
+              inputMode="decimal"
+              placeholder="0"
+              value={shopForm.minOrder}
+              onChange={(event) => setShopForm({ ...shopForm, minOrder: event.target.value })}
+            />
+          </label>
+          <p className="hint">O cliente só avança se o pedido (sem o frete) atingir esse valor. Use 0 para não exigir mínimo.</p>
+          <label>
+            Raio máximo de entrega (km)
+            <input
+              inputMode="decimal"
+              placeholder="10"
+              value={shopForm.deliveryMaxKm}
+              onChange={(event) => setShopForm({ ...shopForm, deliveryMaxKm: event.target.value })}
+            />
+          </label>
+          <p className="hint">Fora desse raio a entrega não é oferecida. As faixas abaixo definem o valor até cada distância.</p>
+          {(shopForm.deliveryFees || []).map((row, index) => (
+            <div className="cep-row fee-row" key={`fee-${index}`}>
+              <label>
+                Até (km)
+                <input
+                  inputMode="decimal"
+                  value={row.upTo}
+                  onChange={(event) => {
+                    const deliveryFees = shopForm.deliveryFees.map((item, itemIndex) =>
+                      itemIndex === index ? { ...item, upTo: event.target.value } : item,
+                    );
+                    setShopForm({ ...shopForm, deliveryFees });
+                  }}
+                />
+              </label>
+              <label>
+                Valor (R$)
+                <input
+                  inputMode="decimal"
+                  value={row.fee}
+                  onChange={(event) => {
+                    const deliveryFees = shopForm.deliveryFees.map((item, itemIndex) =>
+                      itemIndex === index ? { ...item, fee: event.target.value } : item,
+                    );
+                    setShopForm({ ...shopForm, deliveryFees });
+                  }}
+                />
+              </label>
+              {shopForm.deliveryFees.length > 1 ? (
+                <button
+                  type="button"
+                  className="text-btn danger fee-remove"
+                  onClick={() =>
+                    setShopForm({
+                      ...shopForm,
+                      deliveryFees: shopForm.deliveryFees.filter((_, itemIndex) => itemIndex !== index),
+                    })
+                  }
+                >
+                  Tirar
+                </button>
+              ) : null}
+            </div>
+          ))}
+          {shopForm.deliveryFees.length < 8 ? (
+            <button
+              type="button"
+              className="ghost"
+              onClick={() =>
+                setShopForm({
+                  ...shopForm,
+                  deliveryFees: [...shopForm.deliveryFees, { upTo: shopForm.deliveryMaxKm || 10, fee: 0 }],
+                })
+              }
+            >
+              Adicionar faixa
+            </button>
+          ) : null}
+          <p className="hint">Exemplo: 0 a 3 km grátis, 4 a 7 km R$ 8, 8 a 10 km R$ 12.</p>
           <h3 className="admin-subtitle">Pagamento</h3>
           <p className="hint">Cole as chaves da conta Stripe desta loja. A chave secreta não aparece de novo depois de salvar.</p>
           <label>

@@ -1,5 +1,6 @@
 import { useCatalog } from "../catalog";
 import { money } from "../format";
+import { cleanMinOrder } from "../freight";
 import { useCart } from "../cart";
 import { useUI } from "../router";
 import { BottomNav, PageHead, Thumb } from "../ui";
@@ -15,6 +16,8 @@ export default function Bag() {
   const { openProduct, openCheckout, goHome, route } = useUI();
   const { shop, ready, missing } = useCatalog();
   const waiting = !ready || (route.slug && shop.slug !== route.slug && !missing);
+  const minOrder = cleanMinOrder(shop.minOrder);
+  const belowMin = minOrder > 0 && total < Math.max(0.5, minOrder);
 
   return (
     <div className="bag-page">
@@ -69,7 +72,8 @@ export default function Bag() {
               <span>Total</span>
               <strong>{money(total)}</strong>
             </div>
-            <button type="button" className="primary" onClick={openCheckout}>
+            {minOrder > 0 ? <p className="hint">Pedido mínimo: {money(Math.max(0.5, minOrder))}</p> : null}
+            <button type="button" className="primary" onClick={openCheckout} disabled={belowMin}>
               <span>Finalizar pedido</span>
               <span>{money(total)}</span>
             </button>
