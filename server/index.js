@@ -290,8 +290,13 @@ async function createCheckout(request, response) {
   let delivery = null;
   if (mode === "entrega") {
     delivery = await quoteDelivery(
-      { address: store.shop.address, cep: store.shop.cep },
-      { address, cep },
+      {
+        address: store.shop.address,
+        cep: store.shop.cep,
+        deliveryMaxKm: store.shop.deliveryMaxKm,
+        deliveryFees: store.shop.deliveryFees,
+      },
+      { address, cep, number: customer.number },
     );
     if (delivery.error) {
       json(response, 400, { error: delivery.error });
@@ -474,8 +479,13 @@ async function quoteDeliveryRoute(request, response) {
     return;
   }
   const quote = await quoteDelivery(
-    { address: store.shop.address, cep: store.shop.cep },
-    { address, cep },
+    {
+      address: store.shop.address,
+      cep: store.shop.cep,
+      deliveryMaxKm: store.shop.deliveryMaxKm,
+      deliveryFees: store.shop.deliveryFees,
+    },
+    { address, cep, number: payload.number },
   );
   if (quote.error) {
     json(response, 400, { error: quote.error });

@@ -273,7 +273,12 @@ export default function Checkout() {
         const response = await fetch("/api/quote-delivery", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ slug: shop.slug, cep, address: customer.address }),
+          body: JSON.stringify({
+            slug: shop.slug,
+            cep,
+            address: customer.address,
+            number: customer.number,
+          }),
         });
         const payload = await response.json().catch(() => ({}));
         if (cancel) return;
