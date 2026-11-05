@@ -1,21 +1,32 @@
+import { cepDigits, composeAddress, extractCep } from "../src/cep.js";
 import { deliveryQuoteFromKm, kmBetween } from "../src/freight.js";
 
 const cache = new Map();
 
-async function geocode(address) {
-  const key = String(address || "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, " ");
-  if (key.length < 6) return null;
-  if (cache.has(key)) return cache.get(key);
+function remember(key, point) {
+  if (!point) return null;
+  cache.set(key, point);
+  if (cache.size > 400) {
+    const first = cache.keys().next().value;
+    cache.delete(first);
+  }
+  return point;
+}
 
+function pointFrom(hit) {
+  const lat = Number(hit?.lat);
+  const lon = Number(hit?.lon);
+  return Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : null;
+}
+
+async function nominatim(params) {
   const query = new URL("https://nominatim.openstreetmap.org/search");
   query.searchParams.set("format", "jsonv2");
   query.searchParams.set("limit", "1");
   query.searchParams.set("countrycodes", "br");
-  query.searchParams.set("q", `${key}, Brasil`);
-
+  for (const [key, value] of Object.entries(params)) {
+    if (value) query.searchParams.set(key, value);
+  }
   const response = await fetch(query, {
     headers: {
       Accept: "application/json",
@@ -24,34 +35,73 @@ async function geocode(address) {
   });
   if (!response.ok) return null;
   const rows = await response.json();
-  const hit = Array.isArray(rows) ? rows[0] : null;
-  const point = hit
-    ? { lat: Number(hit.lat), lon: Number(hit.lon) }
-    : null;
-  const ok = point && Number.isFinite(point.lat) && Number.isFinite(point.lon) ? point : null;
-  if (ok) {
-    cache.set(key, ok);
-    if (cache.size > 400) {
-      const first = cache.keys().next().value;
-      cache.delete(first);
-    }
-  }
-  return ok;
+  return pointFrom(Array.isArray(rows) ? rows[0] : null);
 }
 
-export async function quoteDelivery(shopAddress, customerAddress) {
-  const origin = String(shopAddress || "").trim();
-  const dest = String(customerAddress || "").trim();
-  if (origin.length < 6) {
-    return { error: "A loja ainda não cadastrou o endereço para calcular o frete." };
+async function geocode(address) {
+  const key = String(address || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+  if (key.length < 6) return null;
+  if (cache.has(key)) return cache.get(key);
+  const point = await nominatim({ q: `${key}, Brasil` });
+  return remember(key, point);
+}
+
+async function lookupViaCep(cep) {
+  const digits = cepDigits(cep);
+  if (digits.length !== 8) return null;
+  const cacheKey = `via:${digits}`;
+  if (cache.has(cacheKey)) return cache.get(cacheKey);
+  const response = await fetch(`https://viacep.com.br/ws/${digits}/json/`);
+  const data = await response.json().catch(() => null);
+  if (!response.ok || !data || data.erro) return null;
+  const place = {
+    cep: digits,
+    street: String(data.logradouro || "").trim(),
+    neighborhood: String(data.bairro || "").trim(),
+    city: String(data.localidade || "").trim(),
+    uf: String(data.uf || "").trim(),
+  };
+  cache.set(cacheKey, place);
+  return place;
+}
+
+async function geocodeCep(cep) {
+  const digits = cepDigits(cep) || extractCep(cep);
+  if (digits.length !== 8) return null;
+  const cacheKey = `cep:${digits}`;
+  if (cache.has(cacheKey)) return cache.get(cacheKey);
+
+  const place = await lookupViaCep(digits);
+  const query = place
+    ? composeAddress({ ...place, cep: digits })
+    : `${digits}, Brasil`;
+  const point =
+    (await geocode(query)) ||
+    (await nominatim({ postalcode: digits, city: place?.city || "", state: place?.uf || "" })) ||
+    (await nominatim({ postalcode: digits }));
+  return remember(cacheKey, point);
+}
+
+export async function quoteDelivery(shop = {}, dest = {}) {
+  const shopAddress = typeof shop === "string" ? shop : String(shop?.address || "").trim();
+  const destAddress = typeof dest === "string" ? dest : String(dest?.address || "").trim();
+  const shopCep = cepDigits(typeof shop === "string" ? extractCep(shop) : shop?.cep) || extractCep(shopAddress);
+  const destCep = cepDigits(typeof dest === "string" ? extractCep(dest) : dest?.cep) || extractCep(destAddress);
+
+  if (!shopCep && shopAddress.length < 6) {
+    return { error: "A loja ainda não cadastrou o CEP para calcular o frete." };
   }
-  if (dest.length < 6) {
-    return { error: "Informe o endereço da entrega, com rua, número e bairro." };
+  if (!destCep && destAddress.length < 6) {
+    return { error: "Informe o CEP da entrega." };
   }
-  const from = await geocode(origin);
-  const to = await geocode(dest);
+
+  const from = (shopCep && (await geocodeCep(shopCep))) || (await geocode(shopAddress));
+  const to = (destCep && (await geocodeCep(destCep))) || (await geocode(destAddress));
   if (!from || !to) {
-    return { error: "Não encontramos esse endereço. Inclua rua, número e bairro." };
+    return { error: "Não encontramos esse CEP. Confira os números e tente de novo." };
   }
   return deliveryQuoteFromKm(kmBetween(from, to));
 }

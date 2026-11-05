@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { loadStripe } from "@stripe/stripe-js";
 import { useCatalog } from "../catalog";
+import { cepDigits, composeAddress, formatCep, lookupCep } from "../cep";
 import { formatPhone, money, phoneDigits, validPhone } from "../format";
 import { deliveryFeeLabel } from "../freight";
 import { useCart } from "../cart";
@@ -36,6 +37,7 @@ export default function Checkout() {
   const [completing, setCompleting] = useState(false);
   const [delivery, setDelivery] = useState(null);
   const [quoting, setQuoting] = useState(false);
+  const [cepError, setCepError] = useState("");
   const box = useRef(null);
   const walletBox = useRef(null);
   const checkoutRef = useRef(null);
@@ -48,7 +50,22 @@ export default function Checkout() {
   const pixAlive = Boolean(pixCopy) && pixMsLeft > 0;
   const deliveryFee = customer.mode === "entrega" && delivery && !delivery.error ? Number(delivery.fee) || 0 : 0;
   const payTotal = total + deliveryFee;
-  const deliveryReady = customer.mode !== "entrega" || Boolean(delivery && !delivery.error && !quoting);
+  const deliveryCep = cepDigits(customer.cep);
+  const deliveryReady =
+    customer.mode !== "entrega" ||
+    Boolean(
+      deliveryCep.length === 8 &&
+        String(customer.number || "").trim() &&
+        customer.city &&
+        delivery &&
+        !delivery.error &&
+        !quoting &&
+        !cepError,
+    );
+
+  function updatePlace(patch) {
+    setCustomer(patch);
+  }
 
   function goPaid(id = sessionId) {
     if (leaving.current) return;
@@ -192,12 +209,59 @@ export default function Checkout() {
 
   useEffect(() => {
     if (customer.mode !== "entrega") {
+      setCepError("");
+      return undefined;
+    }
+    const digits = cepDigits(customer.cep);
+    if (digits.length !== 8) {
+      setCepError("");
+      return undefined;
+    }
+    let cancel = false;
+    lookupCep(digits).then((found) => {
+      if (cancel) return;
+      if (found.error) {
+        setCepError(found.error);
+        setCustomer({ street: "", neighborhood: "", city: "", uf: "" });
+        return;
+      }
+      setCepError("");
+      setCustomer({
+        street: found.street,
+        neighborhood: found.neighborhood,
+        city: found.city,
+        uf: found.uf,
+      });
+    });
+    return () => {
+      cancel = true;
+    };
+  }, [customer.mode, customer.cep]);
+
+  useEffect(() => {
+    if (customer.mode !== "entrega") return;
+    const address = composeAddress(customer);
+    if (address !== customer.address) setCustomer({ address });
+  }, [
+    customer.mode,
+    customer.cep,
+    customer.number,
+    customer.complement,
+    customer.street,
+    customer.neighborhood,
+    customer.city,
+    customer.uf,
+    customer.address,
+  ]);
+
+  useEffect(() => {
+    if (customer.mode !== "entrega") {
       setDelivery(null);
       setQuoting(false);
       return undefined;
     }
-    const address = String(customer.address || "").trim();
-    if (address.length < 6 || !shop.slug) {
+    const cep = cepDigits(customer.cep);
+    if (cep.length !== 8 || !shop.slug || cepError) {
       setDelivery(null);
       setQuoting(false);
       return undefined;
@@ -209,7 +273,7 @@ export default function Checkout() {
         const response = await fetch("/api/quote-delivery", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ slug: shop.slug, address }),
+          body: JSON.stringify({ slug: shop.slug, cep, address: customer.address }),
         });
         const payload = await response.json().catch(() => ({}));
         if (cancel) return;
@@ -228,7 +292,7 @@ export default function Checkout() {
       cancel = true;
       clearTimeout(timer);
     };
-  }, [customer.mode, customer.address, shop.slug]);
+  }, [customer.mode, customer.cep, customer.address, shop.slug, cepError]);
 
   useEffect(() => {
     if (!pixExpiresAt) return undefined;
@@ -280,8 +344,16 @@ export default function Checkout() {
     }
     if (whatsapp !== customer.whatsapp) setCustomer({ whatsapp });
     if (customer.mode === "entrega") {
-      if (customer.address.trim().length < 6) {
-        setError("Informe o endereço da entrega.");
+      if (deliveryCep.length !== 8) {
+        setError("Informe o CEP da entrega.");
+        return;
+      }
+      if (cepError) {
+        setError(cepError);
+        return;
+      }
+      if (!String(customer.number || "").trim()) {
+        setError("Informe o número da entrega.");
         return;
       }
       if (quoting || !delivery || delivery.error) {
@@ -305,7 +377,8 @@ export default function Checkout() {
             name,
             whatsapp,
             mode: customer.mode,
-            address: customer.address,
+            cep: deliveryCep,
+            address: composeAddress(customer),
             notes: customer.notes,
           },
           lines: lines.map((line) => ({
@@ -525,16 +598,53 @@ export default function Checkout() {
 
           {customer.mode === "entrega" ? (
             <>
+              <div className="cep-row">
+                <label>
+                  CEP
+                  <input
+                    value={formatCep(customer.cep)}
+                    inputMode="numeric"
+                    autoComplete="postal-code"
+                    maxLength={9}
+                    placeholder="00000-000"
+                    onChange={(event) =>
+                      updatePlace({
+                        cep: cepDigits(event.target.value),
+                        street: "",
+                        neighborhood: "",
+                        city: "",
+                        uf: "",
+                      })
+                    }
+                  />
+                </label>
+                <label>
+                  Número
+                  <input
+                    value={customer.number || ""}
+                    inputMode="text"
+                    autoComplete="address-line2"
+                    maxLength={12}
+                    placeholder="123"
+                    onChange={(event) => updatePlace({ number: event.target.value })}
+                  />
+                </label>
+              </div>
               <label>
-                Endereço
+                Complemento
                 <input
-                  value={customer.address}
-                  autoComplete="street-address"
-                  maxLength={160}
-                  placeholder="Rua, número e bairro"
-                  onChange={(event) => setCustomer({ address: event.target.value })}
+                  value={customer.complement || ""}
+                  maxLength={40}
+                  placeholder="Apto, bloco, casa"
+                  onChange={(event) => updatePlace({ complement: event.target.value })}
                 />
               </label>
+              {customer.city ? (
+                <p className="hint">
+                  {[customer.street, customer.neighborhood, customer.city, customer.uf].filter(Boolean).join(" · ")}
+                </p>
+              ) : null}
+              {cepError ? <p className="form-error">{cepError}</p> : null}
               {quoting ? <p className="hint">Calculando o frete…</p> : null}
               {delivery?.error ? <p className="form-error">{delivery.error}</p> : null}
               {delivery && !delivery.error && !quoting ? (
@@ -572,7 +682,7 @@ export default function Checkout() {
                     ? "Calculando…"
                     : delivery && !delivery.error
                       ? deliveryFeeLabel(delivery)
-                      : "Informe o endereço"}
+                      : "Informe o CEP"}
                 </span>
               </p>
             ) : null}

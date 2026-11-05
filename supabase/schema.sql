@@ -36,6 +36,7 @@ alter table public.shops add column if not exists paid_message text not null def
 
 Agradecemos pela preferência! 😊';
 alter table public.shops add column if not exists logo text not null default '';
+alter table public.shops add column if not exists cep text not null default '';
 
 create table if not exists public.shop_secrets (
   shop_id uuid primary key references public.shops (id) on delete cascade,

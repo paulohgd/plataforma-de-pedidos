@@ -9,7 +9,7 @@ export function explain(error) {
   if (/slug/i.test(message) && /column|schema cache/i.test(message)) {
     return "Falta atualizar a base. Rode o schema.sql de novo no Supabase.";
   }
-  if (code === "PGRST205" || code === "42P01" || /schema cache/i.test(message) || /shop_secrets|paid_title|stripe_publishable|item_types|\bactive\b|\blogo\b/i.test(message)) {
+  if (code === "PGRST205" || code === "42P01" || /schema cache/i.test(message) || /shop_secrets|paid_title|stripe_publishable|item_types|\bactive\b|\blogo\b|\bcep\b/i.test(message)) {
     return "Falta atualizar a base. Rode o schema.sql de novo no Supabase.";
   }
   if (code === "23503") return "Essa categoria ainda tem produtos vinculados.";
@@ -54,6 +54,7 @@ function toStore(shop, categories, products, itemTypes) {
       slug: shop.slug || slugify(shop.name),
       whatsapp: shop.whatsapp || "",
       address: shop.address || "",
+      cep: shop.cep || "",
       hours: shop.hours || "",
       open: shop.is_open !== false,
       openLabel: shop.open_label || defaultShop.openLabel,
@@ -277,6 +278,7 @@ export async function saveShopRow(shopId, shop) {
     name: shop.name,
     whatsapp: shop.whatsapp,
     address: shop.address,
+    cep: shop.cep || "",
     hours: shop.hours,
     is_open: shop.open,
     open_label: shop.openLabel,
@@ -289,6 +291,10 @@ export async function saveShopRow(shopId, shop) {
   let { error } = await supabase.from("shops").update({ ...fields, slug: shop.slug }).eq("id", shopId);
   if (error && missingSlugColumn(error)) {
     ({ error } = await supabase.from("shops").update(fields).eq("id", shopId));
+  }
+  if (error && /\bcep\b/i.test(error.message || "") && /column|schema cache/i.test(error.message || "")) {
+    const { cep: _cep, ...rest } = fields;
+    ({ error } = await supabase.from("shops").update({ ...rest, slug: shop.slug }).eq("id", shopId));
   }
   return error ? explain(error) : "";
 }

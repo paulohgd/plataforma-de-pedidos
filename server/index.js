@@ -69,6 +69,7 @@ async function loadShop(slug) {
       slug: shop.slug,
       whatsapp: shop.whatsapp || "",
       address: shop.address || "",
+      cep: shop.cep || "",
       open: shop.is_open !== false,
       stripePublishableKey: shop.stripe_publishable_key || "",
       paidTitle: shop.paid_title || paidTitle,
@@ -244,6 +245,7 @@ async function createCheckout(request, response) {
   const whatsapp = fullPhone(customer.whatsapp);
   const mode = customer.mode === "entrega" ? "entrega" : "retirada";
   const address = String(customer.address || "").trim();
+  const cep = String(customer.cep || "").replace(/\D/g, "").slice(0, 8);
   const notes = String(customer.notes || "").trim().slice(0, 200);
 
   if (name.length < 2) {
@@ -254,8 +256,8 @@ async function createCheckout(request, response) {
     json(response, 400, { error: "Informe um WhatsApp válido, com DDD." });
     return;
   }
-  if (mode === "entrega" && address.length < 6) {
-    json(response, 400, { error: "Informe o endereço da entrega." });
+  if (mode === "entrega" && cep.length !== 8 && address.length < 6) {
+    json(response, 400, { error: "Informe o CEP da entrega." });
     return;
   }
 
@@ -284,7 +286,10 @@ async function createCheckout(request, response) {
 
   let delivery = null;
   if (mode === "entrega") {
-    delivery = await quoteDelivery(store.shop.address, address);
+    delivery = await quoteDelivery(
+      { address: store.shop.address, cep: store.shop.cep },
+      { address, cep },
+    );
     if (delivery.error) {
       json(response, 400, { error: delivery.error });
       return;
@@ -459,12 +464,16 @@ async function quoteDeliveryRoute(request, response) {
   const payload = await readJson(request, 4096);
   const slug = String(payload.slug || "").trim();
   const address = String(payload.address || "").trim();
+  const cep = String(payload.cep || "").replace(/\D/g, "").slice(0, 8);
   const store = await loadShop(slug);
   if (!store) {
     json(response, 404, { error: "Loja não encontrada." });
     return;
   }
-  const quote = await quoteDelivery(store.shop.address, address);
+  const quote = await quoteDelivery(
+    { address: store.shop.address, cep: store.shop.cep },
+    { address, cep },
+  );
   if (quote.error) {
     json(response, 400, { error: quote.error });
     return;

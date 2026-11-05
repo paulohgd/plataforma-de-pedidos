@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { paidMessage, paidTitle } from "../config";
 import { useCatalog } from "../catalog";
 import { formatPhone, money, saoPauloDayBounds, slugify } from "../format";
+import { cepDigits, composeAddress, formatCep, lookupCep } from "../cep";
 import { fileToLogo } from "../images";
 import { PaidCopy } from "../PaidCopy";
 import { fetchShopOrders, fetchShopSecretStatus } from "../remote";
@@ -436,6 +437,7 @@ function AdminPanel() {
     name: shop.name,
     whatsapp: shop.whatsapp,
     address: shop.address,
+    cep: shop.cep || "",
     hours: shop.hours,
     open: shop.open,
     openLabel: shop.openLabel,
@@ -457,6 +459,7 @@ function AdminPanel() {
       name: shop.name,
       whatsapp: shop.whatsapp,
       address: shop.address,
+      cep: shop.cep || "",
       hours: shop.hours,
       open: shop.open,
       openLabel: shop.openLabel,
@@ -850,6 +853,28 @@ function AdminPanel() {
             />
           </label>
           <p className="hint">DDI e DDD, só números. O pedido do cliente abre nesse WhatsApp.</p>
+          <label>
+            CEP da loja
+            <input
+              value={formatCep(shopForm.cep)}
+              inputMode="numeric"
+              maxLength={9}
+              placeholder="00000-000"
+              onChange={async (event) => {
+                const cep = cepDigits(event.target.value);
+                setShopForm((current) => ({ ...current, cep }));
+                if (cep.length !== 8) return;
+                const found = await lookupCep(cep);
+                if (found.error) return;
+                setShopForm((current) => ({
+                  ...current,
+                  cep,
+                  address: current.address.trim() || composeAddress(found).slice(0, 120),
+                }));
+              }}
+            />
+          </label>
+          <p className="hint">O frete é calculado deste CEP até o CEP do cliente.</p>
           <label>
             Endereço
             <input value={shopForm.address} maxLength={120} onChange={(event) => setShopForm({ ...shopForm, address: event.target.value })} />

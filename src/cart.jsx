@@ -28,6 +28,13 @@ const emptyCustomer = {
   name: "",
   whatsapp: "",
   mode: "retirada",
+  cep: "",
+  number: "",
+  complement: "",
+  street: "",
+  neighborhood: "",
+  city: "",
+  uf: "",
   address: "",
   notes: "",
 };
