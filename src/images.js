@@ -1,76 +1,29 @@
-export function fileToLogo(file) {
+export function validateImageFile(file) {
   if (!file || !file.type.startsWith("image/")) {
-    return Promise.reject(new Error("Escolha um arquivo de imagem."));
+    throw new Error("Escolha um arquivo de imagem.");
   }
   if (file.size > 8 * 1024 * 1024) {
-    return Promise.reject(new Error("A imagem passa de 8 MB."));
+    throw new Error("A imagem passa de 8 MB.");
   }
-
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const image = new Image();
-    image.onload = () => {
-      const size = 512;
-      const scale = Math.min(size / Math.max(image.width, 1), size / Math.max(image.height, 1));
-      const width = Math.max(1, Math.round(image.width * scale));
-      const height = Math.max(1, Math.round(image.height * scale));
-      const canvas = document.createElement("canvas");
-      canvas.width = size;
-      canvas.height = size;
-      const context = canvas.getContext("2d");
-      if (!context) {
-        URL.revokeObjectURL(url);
-        reject(new Error("Não foi possível ler a imagem."));
-        return;
-      }
-      context.clearRect(0, 0, size, size);
-      context.drawImage(image, Math.round((size - width) / 2), Math.round((size - height) / 2), width, height);
-      URL.revokeObjectURL(url);
-      resolve(canvas.toDataURL("image/png"));
-    };
-    image.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error("Não foi possível ler a imagem."));
-    };
-    image.src = url;
-  });
 }
 
-export function fileToImage(file) {
-  if (!file || !file.type.startsWith("image/")) {
-    return Promise.reject(new Error("Escolha um arquivo de imagem."));
+export function cropToDataUrl(image, { sx, sy, size }, { output = 960, type = "image/jpeg", quality = 0.82 } = {}) {
+  const sourceSize = Math.max(1, Math.min(Number(size) || 1, image.naturalWidth || image.width, image.naturalHeight || image.height));
+  const maxX = Math.max(0, (image.naturalWidth || image.width) - sourceSize);
+  const maxY = Math.max(0, (image.naturalHeight || image.height) - sourceSize);
+  const x = Math.min(Math.max(0, Number(sx) || 0), maxX);
+  const y = Math.min(Math.max(0, Number(sy) || 0), maxY);
+  const canvas = document.createElement("canvas");
+  canvas.width = output;
+  canvas.height = output;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Não foi possível recortar a imagem.");
+  if (type === "image/jpeg") {
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, output, output);
+  } else {
+    context.clearRect(0, 0, output, output);
   }
-  if (file.size > 8 * 1024 * 1024) {
-    return Promise.reject(new Error("A imagem passa de 8 MB."));
-  }
-
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const image = new Image();
-    image.onload = () => {
-      const max = 960;
-      const scale = Math.min(1, max / Math.max(image.width, image.height));
-      const width = Math.max(1, Math.round(image.width * scale));
-      const height = Math.max(1, Math.round(image.height * scale));
-      const canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = height;
-      const context = canvas.getContext("2d");
-      if (!context) {
-        URL.revokeObjectURL(url);
-        reject(new Error("Não foi possível ler a imagem."));
-        return;
-      }
-      context.fillStyle = "#ffffff";
-      context.fillRect(0, 0, width, height);
-      context.drawImage(image, 0, 0, width, height);
-      URL.revokeObjectURL(url);
-      resolve(canvas.toDataURL("image/jpeg", 0.72));
-    };
-    image.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error("Não foi possível ler a imagem."));
-    };
-    image.src = url;
-  });
+  context.drawImage(image, x, y, sourceSize, sourceSize, 0, 0, output, output);
+  return canvas.toDataURL(type, quality);
 }

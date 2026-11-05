@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { useCatalog } from "../catalog";
-import { fileToImage } from "../images";
+import ImageCrop from "../ImageCrop";
+import { validateImageFile } from "../images";
 import { useUI } from "../router";
 import { PageHead, Thumb } from "../ui";
 import RequireOwner from "./RequireOwner";
@@ -33,21 +34,26 @@ function ProductEditor() {
   const [featured, setFeatured] = useState(Boolean(existing?.featured));
   const [active, setActive] = useState(existing?.active !== false);
   const [image, setImage] = useState(existing?.image || "");
+  const [cropUrl, setCropUrl] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  async function onFile(event) {
+  function closeCrop() {
+    if (cropUrl) URL.revokeObjectURL(cropUrl);
+    setCropUrl("");
+  }
+
+  function onFile(event) {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
-    setError("");
-    setBusy(true);
     try {
-      setImage(await fileToImage(file));
+      validateImageFile(file);
+      if (cropUrl) URL.revokeObjectURL(cropUrl);
+      setCropUrl(URL.createObjectURL(file));
+      setError("");
     } catch (failure) {
       setError(failure.message || "Não foi possível usar essa imagem.");
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -121,7 +127,7 @@ function ProductEditor() {
           <Thumb src={image} className="image-preview" />
           <div className="image-actions">
             <button type="button" className="ghost" onClick={() => fileRef.current?.click()} disabled={busy}>
-              {busy ? "Lendo imagem…" : image ? "Trocar imagem" : "Escolher imagem"}
+              {image ? "Trocar imagem" : "Escolher imagem"}
             </button>
             {image ? (
               <button type="button" className="ghost" onClick={() => setImage("")}>
@@ -131,6 +137,17 @@ function ProductEditor() {
           </div>
         </div>
         <input ref={fileRef} className="file-input" tabIndex={-1} type="file" accept="image/*" onChange={onFile} />
+        <p className="hint">A foto é recortada em quadrado e aparece preenchendo o cardápio.</p>
+        {cropUrl ? (
+          <ImageCrop
+            src={cropUrl}
+            onCancel={closeCrop}
+            onConfirm={(next) => {
+              setImage(next);
+              closeCrop();
+            }}
+          />
+        ) : null}
         <label>
           Ou cole o link da imagem
           <input

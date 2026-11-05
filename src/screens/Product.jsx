@@ -34,7 +34,7 @@ export default function Product() {
   const [showErrors, setShowErrors] = useState(false);
 
   useEffect(() => {
-    const onScroll = () => setCompact(window.scrollY > 120);
+    const onScroll = () => setCompact(window.scrollY > 200);
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
@@ -195,10 +195,10 @@ export default function Product() {
 
       <section className="hero">
         <Thumb src={product.image} alt={product.name} className="hero-photo" />
-        <div>
+        <div className="hero-copy">
           <h1>{product.name}</h1>
-          <span className="price">{money(product.price)}</span>
           {product.description ? <p className="desc">{product.description}</p> : null}
+          <span className="price">{money(product.price)}</span>
         </div>
       </section>
 

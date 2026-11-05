@@ -131,6 +131,7 @@ export default function Checkout() {
               colorText: dark ? "#f2f2f2" : "#2a2a2a",
               colorTextSecondary: dark ? "#c4c4c4" : "#5a5a5a",
               borderRadius: "8px",
+              fontSizeBase: "16px",
             },
           },
         },

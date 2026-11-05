@@ -4,7 +4,8 @@ import { useCatalog } from "../catalog";
 import { formatPhone, money, saoPauloDayBounds, slugify } from "../format";
 import { cepDigits, composeAddress, formatCep, lookupCep } from "../cep";
 import { cleanDeliveryFees, defaultDeliveryMaxKm } from "../freight";
-import { fileToLogo } from "../images";
+import ImageCrop from "../ImageCrop";
+import { validateImageFile } from "../images";
 import { PaidCopy } from "../PaidCopy";
 import { fetchShopOrders, fetchShopSecretStatus } from "../remote";
 import { useUI } from "../router";
@@ -433,7 +434,7 @@ function AdminPanel() {
   const [confirmAccount, setConfirmAccount] = useState(false);
   const [secretsSaved, setSecretsSaved] = useState({ stripe: false, discord: false });
   const logoFile = useRef(null);
-  const [logoBusy, setLogoBusy] = useState(false);
+  const [logoCropUrl, setLogoCropUrl] = useState("");
   const [shopForm, setShopForm] = useState({
     name: shop.name,
     whatsapp: shop.whatsapp,
@@ -560,19 +561,22 @@ function AdminPanel() {
     notify("Dados da loja salvos.");
   }
 
-  async function onLogoFile(event) {
+  function closeLogoCrop() {
+    if (logoCropUrl) URL.revokeObjectURL(logoCropUrl);
+    setLogoCropUrl("");
+  }
+
+  function onLogoFile(event) {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
-    setError("");
-    setLogoBusy(true);
     try {
-      const logo = await fileToLogo(file);
-      setShopForm((current) => ({ ...current, logo }));
+      validateImageFile(file);
+      if (logoCropUrl) URL.revokeObjectURL(logoCropUrl);
+      setLogoCropUrl(URL.createObjectURL(file));
+      setError("");
     } catch (failure) {
       showError(failure.message || "Não foi possível usar essa imagem.");
-    } finally {
-      setLogoBusy(false);
     }
   }
 
@@ -838,8 +842,8 @@ function AdminPanel() {
           <div className="image-row">
             <Thumb src={shopForm.logo} className="shop-logo-preview" />
             <div className="image-actions">
-              <button type="button" className="ghost" onClick={() => logoFile.current?.click()} disabled={logoBusy}>
-                {logoBusy ? "Lendo imagem…" : shopForm.logo ? "Trocar logo" : "Adicionar logo"}
+              <button type="button" className="ghost" onClick={() => logoFile.current?.click()}>
+                {shopForm.logo ? "Trocar logo" : "Adicionar logo"}
               </button>
               {shopForm.logo ? (
                 <button type="button" className="ghost" onClick={() => setShopForm({ ...shopForm, logo: "" })}>
@@ -849,7 +853,19 @@ function AdminPanel() {
             </div>
           </div>
           <input ref={logoFile} className="file-input" tabIndex={-1} type="file" accept="image/*" onChange={onLogoFile} />
-          <p className="hint">Essa imagem aparece no ícone da aba e no cardápio.</p>
+          <p className="hint">Essa imagem aparece no ícone da aba e no cardápio. Você recorta em quadrado antes de salvar.</p>
+          {logoCropUrl ? (
+            <ImageCrop
+              src={logoCropUrl}
+              outputSize={512}
+              mime="image/png"
+              onCancel={closeLogoCrop}
+              onConfirm={(logo) => {
+                setShopForm((current) => ({ ...current, logo }));
+                closeLogoCrop();
+              }}
+            />
+          ) : null}
           <label>
             WhatsApp
             <input
