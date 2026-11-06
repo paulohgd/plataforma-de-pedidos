@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { CatalogProvider } from "./catalog";
 import { CartProvider } from "./cart";
 import { UIProvider, useUI } from "./router";
@@ -5,12 +6,17 @@ import Home from "./screens/Home";
 import Stores from "./screens/Stores";
 import Product from "./screens/Product";
 import Bag from "./screens/Bag";
-import Checkout from "./screens/Checkout";
-import Paid from "./screens/Paid";
 import Search from "./screens/Search";
-import Access from "./screens/Access";
-import Admin from "./screens/Admin";
-import ProductForm from "./screens/ProductForm";
+
+const Checkout = lazy(() => import("./screens/Checkout"));
+const Paid = lazy(() => import("./screens/Paid"));
+const Access = lazy(() => import("./screens/Access"));
+const Admin = lazy(() => import("./screens/Admin"));
+const ProductForm = lazy(() => import("./screens/ProductForm"));
+
+function ScreenFallback() {
+  return <p className="empty-inline">Carregando…</p>;
+}
 
 function Shell() {
   const { route, toast } = useUI();
@@ -20,12 +26,14 @@ function Shell() {
       {route.name === "home" && <Home />}
       {route.name === "product" && <Product key={`${route.id}-${route.lineId || "new"}`} />}
       {route.name === "bag" && <Bag />}
-      {route.name === "checkout" && <Checkout />}
-      {route.name === "paid" && <Paid />}
       {route.name === "search" && <Search />}
-      {route.name === "access" && <Access />}
-      {route.name === "admin" && <Admin />}
-      {route.name === "product-form" && <ProductForm key={route.id || "new"} />}
+      <Suspense fallback={<ScreenFallback />}>
+        {route.name === "checkout" && <Checkout />}
+        {route.name === "paid" && <Paid />}
+        {route.name === "access" && <Access />}
+        {route.name === "admin" && <Admin />}
+        {route.name === "product-form" && <ProductForm key={route.id || "new"} />}
+      </Suspense>
       {toast ? <div className="toast" role="status">{toast}</div> : null}
     </div>
   );

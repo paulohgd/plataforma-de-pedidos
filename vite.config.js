@@ -69,6 +69,18 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   return {
     plugins: [react(), shopTitlePlugin(env)],
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes("node_modules")) return;
+            if (id.includes("@supabase")) return "supabase";
+            if (id.includes("@stripe")) return "stripe";
+            if (id.includes("react-dom") || id.includes(`${path.sep}react${path.sep}`) || id.includes("/react/")) return "react";
+          },
+        },
+      },
+    },
     server: {
       port: 5173,
       host: true,
