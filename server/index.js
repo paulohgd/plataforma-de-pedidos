@@ -4,6 +4,7 @@ import Stripe from "stripe";
 import WebSocket from "ws";
 import { createClient } from "@supabase/supabase-js";
 import { paidMessage, paidTitle } from "../src/config.js";
+import { cleanCouponCode, couponDiscount, findCoupon } from "../src/coupons.js";
 import { checkoutEmail, fullPhone, validPhone } from "../src/format.js";
 import { formatKm } from "../src/freight.js";
 import { buildOrderText, paymentKindFromStripe, whatsappOrderUrl } from "../src/order.js";
@@ -77,6 +78,7 @@ async function loadShop(slug) {
       minOrder: shop.min_order,
       deliveryMaxKm: shop.delivery_max_km,
       deliveryFees: shop.delivery_fees,
+      coupons: shop.coupons,
     },
     products: (products || []).map((product) => ({
       id: product.id,
@@ -287,6 +289,14 @@ async function createCheckout(request, response) {
     return;
   }
 
+  const couponCode = cleanCouponCode(payload.coupon);
+  const coupon = findCoupon(store.shop.coupons, couponCode);
+  if (couponCode && !coupon) {
+    json(response, 400, { error: "Cupom inválido." });
+    return;
+  }
+  const discount = couponDiscount(quoted.total, coupon);
+
   let delivery = null;
   if (mode === "entrega") {
     delivery = await quoteDelivery(
@@ -304,7 +314,11 @@ async function createCheckout(request, response) {
     }
   }
 
-  const payTotal = Number((quoted.total + (delivery?.fee || 0)).toFixed(2));
+  const payTotal = Number((quoted.total - discount + (delivery?.fee || 0)).toFixed(2));
+  if (payTotal < 0.5) {
+    json(response, 400, { error: "O valor com desconto ficou abaixo do mínimo para pagamento." });
+    return;
+  }
   const items = quoted.lines.map((line) => ({
     productId: line.productId,
     name: line.name,
@@ -313,6 +327,15 @@ async function createCheckout(request, response) {
     options: line.options,
     total: line.total,
   }));
+  if (discount > 0 && coupon) {
+    items.push({
+      name: `Cupom ${coupon.code} (${coupon.percent}%)`,
+      qty: 1,
+      note: "",
+      options: [],
+      total: -discount,
+    });
+  }
   if (delivery) {
     items.push({
       name: delivery.fee > 0 ? `Entrega (${formatKm(delivery.km)})` : `Entrega grátis (${formatKm(delivery.km)})`,
@@ -330,6 +353,8 @@ async function createCheckout(request, response) {
     total: payTotal,
     paid: true,
     delivery,
+    coupon,
+    discount,
   });
 
   const orderRow = {
@@ -386,17 +411,32 @@ async function createCheckout(request, response) {
         metadata: orderMeta,
       },
       line_items: [
-        ...quoted.lines.map((line) => ({
-          quantity: line.qty,
-          price_data: {
-            currency: "brl",
-            unit_amount: cents(line.unit),
-            product_data: {
-              name: line.name,
-              description: line.options.map((option) => option.name).join(", ").slice(0, 500) || undefined,
-            },
-          },
-        })),
+        ...(discount > 0
+          ? cents(quoted.total - discount) > 0
+            ? [
+                {
+                  quantity: 1,
+                  price_data: {
+                    currency: "brl",
+                    unit_amount: cents(quoted.total - discount),
+                    product_data: {
+                      name: coupon ? `Pedido (${coupon.code} −${coupon.percent}%)` : "Pedido",
+                    },
+                  },
+                },
+              ]
+            : []
+          : quoted.lines.map((line) => ({
+              quantity: line.qty,
+              price_data: {
+                currency: "brl",
+                unit_amount: cents(line.unit),
+                product_data: {
+                  name: line.name,
+                  description: line.options.map((option) => option.name).join(", ").slice(0, 500) || undefined,
+                },
+              },
+            }))),
         ...(delivery?.fee
           ? [
               {

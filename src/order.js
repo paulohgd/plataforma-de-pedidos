@@ -32,7 +32,7 @@ export function withPaidPayment(text, kind = "card") {
   return `${source.trim()}\n${line}`;
 }
 
-export function buildOrderText({ shop, customer, lines, total, paid = false, payment = "card", delivery = null }) {
+export function buildOrderText({ shop, customer, lines, total, paid = false, payment = "card", delivery = null, coupon = null, discount = 0 }) {
   const out = [
     paid ? `*${shop.name} — pedido pago*` : `*${shop.name} — novo pedido*`,
     "",
@@ -58,6 +58,11 @@ export function buildOrderText({ shop, customer, lines, total, paid = false, pay
       out.push(`   • ${shortGroup(option.groupName)}: ${times}${option.name}`);
     }
     if (line.note) out.push(`   _Obs: ${line.note}_`);
+  }
+
+  if (coupon && discount > 0) {
+    out.push(`*Cupom:* ${coupon.code} (−${coupon.percent}%)`);
+    out.push(`*Desconto:* -${money(discount)}`);
   }
 
   out.push("", `*Total: ${money(total)}*`);

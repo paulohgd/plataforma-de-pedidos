@@ -1,5 +1,6 @@
 import { paidMessage, paidTitle, shop as defaultShop } from "./config";
 import { saoPauloDayBounds, slugify } from "./format";
+import { cleanCoupons } from "./coupons";
 import { cleanDeliveryFees, cleanDeliveryMaxKm, cleanMinOrder, defaultDeliveryFees } from "./freight";
 import { cloneItemType, seedCategories, seedItemTypes, seedProducts } from "./menu";
 import { supabase } from "./supabase";
@@ -10,7 +11,7 @@ export function explain(error) {
   if (/slug/i.test(message) && /column|schema cache/i.test(message)) {
     return "Falta atualizar a base. Rode o schema.sql de novo no Supabase.";
   }
-  if (code === "PGRST205" || code === "42P01" || /schema cache/i.test(message) || /shop_secrets|paid_title|stripe_publishable|item_types|\bactive\b|\blogo\b|\bcep\b|min_order|delivery_max|delivery_fees/i.test(message)) {
+  if (code === "PGRST205" || code === "42P01" || /schema cache/i.test(message) || /shop_secrets|paid_title|stripe_publishable|item_types|\bactive\b|\blogo\b|\bcep\b|min_order|delivery_max|delivery_fees|\bcoupons\b/i.test(message)) {
     return "Falta atualizar a base. Rode o schema.sql de novo no Supabase.";
   }
   if (code === "23503") return "Essa categoria ainda tem produtos vinculados.";
@@ -67,6 +68,7 @@ function toStore(shop, categories, products, itemTypes) {
       minOrder: cleanMinOrder(shop.min_order),
       deliveryMaxKm: cleanDeliveryMaxKm(shop.delivery_max_km),
       deliveryFees: cleanDeliveryFees(shop.delivery_fees?.length ? shop.delivery_fees : defaultDeliveryFees),
+      coupons: cleanCoupons(shop.coupons),
     },
     categories: (categories || []).map((category) => ({ id: category.id, name: category.name })),
     products: (products || []).map((product) => ({
@@ -294,6 +296,7 @@ export async function saveShopRow(shopId, shop) {
     min_order: cleanMinOrder(shop.minOrder),
     delivery_max_km: cleanDeliveryMaxKm(shop.deliveryMaxKm),
     delivery_fees: cleanDeliveryFees(shop.deliveryFees),
+    coupons: cleanCoupons(shop.coupons),
   };
   let { error } = await supabase.from("shops").update({ ...fields, slug: shop.slug }).eq("id", shopId);
   if (error && missingSlugColumn(error)) {
@@ -303,8 +306,8 @@ export async function saveShopRow(shopId, shop) {
     const { cep: _cep, ...rest } = fields;
     ({ error } = await supabase.from("shops").update({ ...rest, slug: shop.slug }).eq("id", shopId));
   }
-  if (error && /min_order|delivery_max_km|delivery_fees/i.test(error.message || "") && /column|schema cache/i.test(error.message || "")) {
-    const { min_order: _min, delivery_max_km: _max, delivery_fees: _fees, ...rest } = fields;
+  if (error && /min_order|delivery_max_km|delivery_fees|\bcoupons\b/i.test(error.message || "") && /column|schema cache/i.test(error.message || "")) {
+    const { min_order: _min, delivery_max_km: _max, delivery_fees: _fees, coupons: _coupons, ...rest } = fields;
     ({ error } = await supabase.from("shops").update({ ...rest, slug: shop.slug }).eq("id", shopId));
   }
   return error ? explain(error) : "";

@@ -2,6 +2,7 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState, createCo
 import { authRedirectTo, clearAuthCallbackUrl, readAuthCallbackError } from "./authCallback";
 import { paidMessage, paidTitle, shop as defaultShop } from "./config";
 import { norm, slugify } from "./format";
+import { cleanCoupons } from "./coupons";
 import { cleanDeliveryFees, cleanDeliveryMaxKm, cleanMinOrder, defaultDeliveryFees, defaultDeliveryMaxKm } from "./freight";
 import { cloneItemType, hydrateProducts, orderFeatured, seedItemTypes } from "./menu";
 import { readPlace, readRoute, singleShopRedirect } from "./place";
@@ -53,6 +54,7 @@ function blankStore() {
       minOrder: 0,
       deliveryMaxKm: defaultDeliveryMaxKm,
       deliveryFees: defaultDeliveryFees.map((row) => ({ ...row })),
+      coupons: [],
     },
     categories: [],
     products: [],
@@ -78,6 +80,7 @@ function cleanShop(shop) {
     minOrder: cleanMinOrder(source.minOrder),
     deliveryMaxKm: cleanDeliveryMaxKm(source.deliveryMaxKm),
     deliveryFees: cleanDeliveryFees(source.deliveryFees?.length ? source.deliveryFees : defaultDeliveryFees),
+    coupons: cleanCoupons(source.coupons),
   };
 }
 

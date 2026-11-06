@@ -3,6 +3,7 @@ import { paidMessage, paidTitle } from "../config";
 import { useCatalog } from "../catalog";
 import { formatPhone, money, saoPauloDayBounds, slugify } from "../format";
 import { cepDigits, composeAddress, formatCep, lookupCep } from "../cep";
+import { cleanCouponCode } from "../coupons";
 import { cleanDeliveryFees, defaultDeliveryMaxKm } from "../freight";
 import ImageCrop from "../ImageCrop";
 import { validateImageFile } from "../images";
@@ -453,6 +454,7 @@ function AdminPanel() {
     minOrder: shop.minOrder ?? 0,
     deliveryMaxKm: shop.deliveryMaxKm ?? defaultDeliveryMaxKm,
     deliveryFees: cleanDeliveryFees(shop.deliveryFees),
+    coupons: Array.isArray(shop.coupons) && shop.coupons.length ? shop.coupons : [],
   });
 
   useEffect(() => {
@@ -478,6 +480,7 @@ function AdminPanel() {
       minOrder: shop.minOrder ?? 0,
       deliveryMaxKm: shop.deliveryMaxKm ?? defaultDeliveryMaxKm,
       deliveryFees: cleanDeliveryFees(shop.deliveryFees),
+      coupons: Array.isArray(shop.coupons) && shop.coupons.length ? shop.coupons : [],
     });
   }, [shop]);
 
@@ -1002,6 +1005,68 @@ function AdminPanel() {
             </button>
           ) : null}
           <p className="hint">Exemplo: 0 a 3 km grátis, 4 a 7 km R$ 8, 8 a 10 km R$ 12.</p>
+          <h3 className="admin-subtitle">Cupons de desconto</h3>
+          <p className="hint">O código pode ter letras e números. O cliente informa a porcentagem de desconto. Ex.: INSTAGRAM30 = 30%.</p>
+          {(shopForm.coupons || []).map((row, index) => (
+            <div className="cep-row fee-row" key={`coupon-${index}`}>
+              <label>
+                Código
+                <input
+                  autoCapitalize="characters"
+                  autoCorrect="off"
+                  spellCheck="false"
+                  maxLength={24}
+                  value={row.code}
+                  onChange={(event) => {
+                    const coupons = shopForm.coupons.map((item, itemIndex) =>
+                      itemIndex === index ? { ...item, code: cleanCouponCode(event.target.value) } : item,
+                    );
+                    setShopForm({ ...shopForm, coupons });
+                  }}
+                />
+              </label>
+              <label>
+                Desconto (%)
+                <input
+                  inputMode="numeric"
+                  placeholder="30"
+                  value={row.percent}
+                  onChange={(event) => {
+                    const coupons = shopForm.coupons.map((item, itemIndex) =>
+                      itemIndex === index ? { ...item, percent: event.target.value } : item,
+                    );
+                    setShopForm({ ...shopForm, coupons });
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                className="text-btn danger fee-remove"
+                onClick={() =>
+                  setShopForm({
+                    ...shopForm,
+                    coupons: shopForm.coupons.filter((_, itemIndex) => itemIndex !== index),
+                  })
+                }
+              >
+                Tirar
+              </button>
+            </div>
+          ))}
+          {(shopForm.coupons || []).length < 20 ? (
+            <button
+              type="button"
+              className="ghost"
+              onClick={() =>
+                setShopForm({
+                  ...shopForm,
+                  coupons: [...(shopForm.coupons || []), { code: "", percent: "" }],
+                })
+              }
+            >
+              Adicionar cupom
+            </button>
+          ) : null}
           <h3 className="admin-subtitle">Pagamento</h3>
           <p className="hint">Cole as chaves da conta Stripe desta loja. A chave secreta não aparece de novo depois de salvar.</p>
           <label>

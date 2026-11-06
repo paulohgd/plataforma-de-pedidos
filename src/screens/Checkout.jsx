@@ -3,6 +3,7 @@ import { loadStripe } from "@stripe/stripe-js";
 import { useCatalog } from "../catalog";
 import { cepDigits, composeAddress, formatCep, lookupCep } from "../cep";
 import { formatPhone, money, phoneDigits, validPhone } from "../format";
+import { cleanCouponCode, couponDiscount, findCoupon } from "../coupons";
 import { cleanMinOrder, deliveryFeeLabel, deliveryRulesHint } from "../freight";
 import { useCart } from "../cart";
 import { checkoutSessionId, fetchCheckoutSession, rememberCheckoutSession } from "../pay";
@@ -38,6 +39,7 @@ export default function Checkout() {
   const [delivery, setDelivery] = useState(null);
   const [quoting, setQuoting] = useState(false);
   const [cepError, setCepError] = useState("");
+  const [couponInput, setCouponInput] = useState("");
   const box = useRef(null);
   const walletBox = useRef(null);
   const checkoutRef = useRef(null);
@@ -49,7 +51,9 @@ export default function Checkout() {
   const pixMsLeft = pixExpiresAt ? pixExpiresAt - now : 0;
   const pixAlive = Boolean(pixCopy) && pixMsLeft > 0;
   const deliveryFee = customer.mode === "entrega" && delivery && !delivery.error ? Number(delivery.fee) || 0 : 0;
-  const payTotal = total + deliveryFee;
+  const coupon = findCoupon(shop.coupons, couponInput);
+  const discount = couponDiscount(total, coupon);
+  const payTotal = Number((total - discount + deliveryFee).toFixed(2));
   const deliveryCep = cepDigits(customer.cep);
   const deliveryReady =
     customer.mode !== "entrega" ||
@@ -343,6 +347,14 @@ export default function Checkout() {
       setError(`O pedido mínimo é ${money(minOrder)}.`);
       return;
     }
+    if (cleanCouponCode(couponInput) && !coupon) {
+      setError("Cupom inválido.");
+      return;
+    }
+    if (payTotal < 0.5) {
+      setError("O valor com desconto ficou abaixo do mínimo para pagamento.");
+      return;
+    }
     const name = String(customer.name || "").trim();
     const whatsapp = phoneDigits(whatsappBox.current?.value || customer.whatsapp);
     if (name.length < 2) {
@@ -402,6 +414,7 @@ export default function Checkout() {
               qty: option.qty,
             })),
           })),
+          coupon: couponInput,
         }),
       });
       const payload = await response.json();
@@ -663,6 +676,20 @@ export default function Checkout() {
           ) : null}
 
           <label>
+            Cupom de desconto
+            <input
+              autoCapitalize="characters"
+              autoCorrect="off"
+              spellCheck="false"
+              maxLength={24}
+              value={couponInput}
+              onChange={(event) => setCouponInput(cleanCouponCode(event.target.value))}
+            />
+          </label>
+          {coupon ? <p className="hint">{coupon.percent}% de desconto aplicado nos itens.</p> : null}
+          {couponInput.length >= 3 && !coupon ? <p className="form-error">Cupom inválido.</p> : null}
+
+          <label>
             Observações do pedido
             <textarea
               rows={2}
@@ -683,6 +710,12 @@ export default function Checkout() {
                 <span>{money(line.total)}</span>
               </p>
             ))}
+            {discount > 0 && coupon ? (
+              <p>
+                <span>Cupom {coupon.code} (−{coupon.percent}%)</span>
+                <span>-{money(discount)}</span>
+              </p>
+            ) : null}
             {customer.mode === "entrega" ? (
               <p>
                 <span>Entrega</span>
