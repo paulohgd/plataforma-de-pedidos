@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
@@ -48,6 +49,18 @@ function shopTitlePlugin(env) {
         }
         return applyShopMeta(html, shopMetaFrom(shop, env));
       },
+    },
+    async closeBundle() {
+      const outDir = path.resolve("dist");
+      const indexPath = path.join(outDir, "index.html");
+      if (!fs.existsSync(indexPath)) return;
+      const template = fs.readFileSync(indexPath, "utf8");
+      const shops = await fetchShops(env);
+      for (const shop of shops) {
+        const dir = path.join(outDir, "loja", shop.slug);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, "index.html"), applyShopMeta(template, shopMetaFrom(shop, env)));
+      }
     },
   };
 }
