@@ -20,7 +20,7 @@ export default function Stores() {
       <div className="shop-list">
         {stores.map((shop) => (
           <button key={shop.slug} type="button" className="shop-link" onClick={() => openShop(shop.slug)}>
-            {shop.logo ? <Thumb src={shop.logo} className="shop-logo" /> : null}
+            {shop.logo ? <Thumb src={shop.logo} className="shop-logo" size={0} eager /> : null}
             <span className="shop-link-copy">
               <strong>{shop.name}</strong>
               <span>{shop.open ? shop.openLabel : shop.closedLabel}</span>

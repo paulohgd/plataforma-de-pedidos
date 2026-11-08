@@ -101,6 +101,39 @@ function cleanProduct(product) {
   };
 }
 
+function cacheKey(slug) {
+  return `pedido-cardapio:${slug}`;
+}
+
+function readCachedStore(slug) {
+  if (!slug) return null;
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(cacheKey(slug)) || "null");
+    if (!parsed?.shopId || parsed.shop?.slug !== slug) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedStore(store) {
+  if (!store?.shopId || !store.shop?.slug) return;
+  try {
+    sessionStorage.setItem(cacheKey(store.shop.slug), JSON.stringify(store));
+  } catch {
+    /* quota */
+  }
+}
+
+function clearCachedStore(slug) {
+  if (!slug) return;
+  try {
+    sessionStorage.removeItem(cacheKey(slug));
+  } catch {
+    /* ignore */
+  }
+}
+
 function uniqueId(name, used) {
   const base = norm(name).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "item";
   let id = base;
@@ -154,6 +187,7 @@ export function CatalogProvider({ children }) {
   function commitStore(next) {
     storeRef.current = next;
     setStore(next);
+    writeCachedStore(next);
   }
 
   const ensureOwnedStore = useCallback(async (user) => {
@@ -202,11 +236,15 @@ export function CatalogProvider({ children }) {
       return { error: "", ownsStore: true };
     }
 
-    let owned = { store: null, error: "" };
-
-    if (user) {
+    async function loadOwned() {
+      if (!user) {
+        setMine(null);
+        setLinking(false);
+        return { store: null, error: "" };
+      }
       setLinking(true);
-      owned = await ensureOwnedStore(user);
+      const owned = await ensureOwnedStore(user);
+      if (current !== ticket.current) return owned;
       if (owned.store) {
         setMine({ shopId: owned.store.shopId, ownerId: owned.store.ownerId, slug: owned.store.shop.slug });
         setRemoteError("");
@@ -217,58 +255,45 @@ export function CatalogProvider({ children }) {
         setMine(null);
       }
       setLinking(false);
-    } else {
-      setMine(null);
-      setLinking(false);
-    }
-
-    const ownsStore = Boolean(owned.store && user && owned.store.ownerId === user.id);
-    if (current !== ticket.current) return { error: owned.error || "", ownsStore };
-
-    if (place.scope === "admin" || place.scope === "access") {
-      if (owned.store) {
-        commitStore(owned.store);
-        setMissing(false);
-      }
-      setReady(true);
-      return { error: owned.error || "", ownsStore };
+      return owned;
     }
 
     if (place.scope === "shop") {
-      if (storeRef.current.shop.slug === place.slug && storeRef.current.shopId) {
-        setMissing(false);
-        setReady(true);
-        return { error: "", ownsStore: Boolean(user && storeRef.current.ownerId === user.id) };
+      if (!(storeRef.current.shop.slug === place.slug && storeRef.current.shopId)) {
+        const loaded = await fetchStoreBySlug(place.slug);
+        if (current !== ticket.current) return { error: "", ownsStore: false };
+        if (loaded.error) {
+          setRemoteError(loaded.error);
+          setReady(true);
+          await loadOwned();
+          return { error: loaded.error, ownsStore: false };
+        }
+        if (!loaded.store) {
+          clearCachedStore(place.slug);
+          commitStore(blankStore());
+          setMissing(true);
+          setRemoteError("");
+          setReady(true);
+          await loadOwned();
+          return { error: "", ownsStore: false };
+        }
+        commitStore(loaded.store);
       }
-      const loaded = await fetchStoreBySlug(place.slug);
-      if (current !== ticket.current) return { error: "", ownsStore: false };
-      if (loaded.error) {
-        setRemoteError(loaded.error);
-        setReady(true);
-        return { error: loaded.error, ownsStore: false };
-      }
-      if (!loaded.store) {
-        commitStore(blankStore());
-        setMissing(true);
-        setRemoteError("");
-        setReady(true);
-        return { error: "", ownsStore: false };
-      }
-      commitStore(loaded.store);
       setMissing(false);
       setRemoteError("");
       setReady(true);
-      return { error: "", ownsStore: Boolean(user && loaded.store.ownerId === user.id) };
+      const owned = await loadOwned();
+      return { error: owned.error || "", ownsStore: Boolean(user && storeRef.current.ownerId === user.id) };
     }
 
     if (place.scope === "directory") {
-      setListed(false);
       const list = await fetchShops();
       if (current !== ticket.current) return { error: "", ownsStore: false };
       if (list.error) {
         setRemoteError(list.error);
         setListed(true);
         setReady(true);
+        await loadOwned();
         return { error: list.error, ownsStore: false };
       }
       setStores(list.shops);
@@ -283,7 +308,21 @@ export function CatalogProvider({ children }) {
         }
       }
       setReady(true);
-      return { error: "", ownsStore };
+      const owned = await loadOwned();
+      return { error: owned.error || "", ownsStore: Boolean(owned.store && user && owned.store.ownerId === user.id) };
+    }
+
+    const owned = await loadOwned();
+    const ownsStore = Boolean(owned.store && user && owned.store.ownerId === user.id);
+    if (current !== ticket.current) return { error: owned.error || "", ownsStore };
+
+    if (place.scope === "admin" || place.scope === "access") {
+      if (owned.store) {
+        commitStore(owned.store);
+        setMissing(false);
+      }
+      setReady(true);
+      return { error: owned.error || "", ownsStore };
     }
 
     setReady(true);
@@ -294,7 +333,63 @@ export function CatalogProvider({ children }) {
     let cancel = false;
 
     async function boot() {
-      const { data } = await supabase.auth.getSession();
+      const place = readPlace();
+      if (place.scope === "shop") {
+        const cached = readCachedStore(place.slug);
+        if (cached) {
+          commitStore(cached);
+          setMissing(false);
+          setReady(true);
+        }
+      }
+
+      const sessionTask = supabase.auth.getSession();
+      const catalogTask =
+        place.scope === "shop"
+          ? fetchStoreBySlug(place.slug)
+          : place.scope === "directory"
+            ? fetchShops()
+            : null;
+
+      if (place.scope === "shop" && catalogTask) {
+        const loaded = await catalogTask;
+        if (cancel) return;
+        if (loaded.error) {
+          setRemoteError(loaded.error);
+          setReady(true);
+        } else if (!loaded.store) {
+          clearCachedStore(place.slug);
+          commitStore(blankStore());
+          setMissing(true);
+          setRemoteError("");
+          setReady(true);
+        } else {
+          commitStore(loaded.store);
+          setMissing(false);
+          setRemoteError("");
+          setReady(true);
+        }
+      } else if (place.scope === "directory" && catalogTask) {
+        const list = await catalogTask;
+        if (cancel) return;
+        if (list.error) setRemoteError(list.error);
+        else {
+          setStores(list.shops);
+          setRemoteError("");
+          setMissing(false);
+          if (list.shops.length === 1) {
+            const next = singleShopRedirect(window.location.pathname, list.shops[0].slug);
+            if (next) {
+              history.replaceState(readRoute(next), "", next);
+              window.dispatchEvent(new Event("pedido-nav"));
+            }
+          }
+        }
+        setListed(true);
+        setReady(true);
+      }
+
+      const { data } = await sessionTask;
       if (cancel) return;
       const user = toAccount(data.session?.user);
       accountRef.current = user;

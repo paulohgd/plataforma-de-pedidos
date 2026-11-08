@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useCart } from "./cart";
 import { useCatalog } from "./catalog";
 import { money } from "./format";
+import { catalogImage, disableCatalogTransforms } from "./images";
 import { useUI } from "./router";
 
 export function IconHome({ filled }) {
@@ -89,10 +90,31 @@ export function IconMenu() {
   );
 }
 
-export function Thumb({ src, alt = "", className = "thumb" }) {
+export function Thumb({ src, alt = "", className = "thumb", size = 360, eager = false }) {
   const [failed, setFailed] = useState(false);
+  const [full, setFull] = useState(!size);
+  useEffect(() => {
+    setFailed(false);
+    setFull(!size);
+  }, [src, size]);
   if (!src || failed) return <span className={`${className} thumb-empty`} aria-hidden="true" />;
-  return <img className={className} src={src} alt={alt} loading="lazy" onError={() => setFailed(true)} />;
+  const display = full ? src : catalogImage(src, size);
+  return (
+    <img
+      className={className}
+      src={display}
+      alt={alt}
+      loading={eager ? "eager" : "lazy"}
+      decoding="async"
+      fetchPriority={eager ? "high" : "auto"}
+      onError={() => {
+        if (!full && display !== src) {
+          disableCatalogTransforms();
+          setFull(true);
+        } else setFailed(true);
+      }}
+    />
+  );
 }
 
 export function ItemLink({ product }) {

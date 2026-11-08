@@ -1,3 +1,29 @@
+let catalogTransforms = true;
+
+export function disableCatalogTransforms() {
+  catalogTransforms = false;
+}
+
+export function catalogImage(src, size = 360) {
+  const raw = String(src || "").trim();
+  if (!raw || !size || !catalogTransforms || !/^https?:\/\//i.test(raw)) return raw;
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return raw;
+  }
+  const marker = "/storage/v1/object/public/";
+  const at = parsed.pathname.indexOf(marker);
+  if (at === -1) return raw;
+  parsed.pathname = `/storage/v1/render/image/public/${parsed.pathname.slice(at + marker.length)}`;
+  parsed.searchParams.set("width", String(size));
+  parsed.searchParams.set("height", String(size));
+  parsed.searchParams.set("resize", "cover");
+  parsed.searchParams.set("quality", "70");
+  return parsed.toString();
+}
+
 export function validateImageFile(file) {
   if (!file || !file.type.startsWith("image/")) {
     throw new Error("Escolha um arquivo de imagem.");

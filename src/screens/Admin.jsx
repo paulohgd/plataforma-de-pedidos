@@ -850,7 +850,7 @@ function AdminPanel() {
           </label>
           <p className="hint">Cardápio público: /loja/{slugify(shopForm.name)}</p>
           <div className="image-row">
-            <Thumb src={shopForm.logo} className="shop-logo-preview" />
+            <Thumb src={shopForm.logo} className="shop-logo-preview" size={0} />
             <div className="image-actions">
               <button type="button" className="ghost" onClick={() => logoFile.current?.click()}>
                 {shopForm.logo ? "Trocar logo" : "Adicionar logo"}

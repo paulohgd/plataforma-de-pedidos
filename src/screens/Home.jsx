@@ -84,7 +84,7 @@ export default function Home() {
       <header className="store-top">
         <div className="brand">
           <div className="brand-name">
-            {shop.logo ? <Thumb src={shop.logo} className="brand-logo" /> : null}
+            {shop.logo ? <Thumb src={shop.logo} className="brand-logo" size={0} eager /> : null}
             <h1>{shop.name}</h1>
           </div>
           <div className="actions">
@@ -138,7 +138,7 @@ export default function Home() {
           <section>
             <h2 className="block-title">Destaques</h2>
             <div className="hl-row">
-              {featured.map((product) => (
+              {featured.map((product, index) => (
                 <a
                   key={product.id}
                   className="hl"
@@ -150,7 +150,7 @@ export default function Home() {
                   }}
                 >
                   <span className="hl-media">
-                    <Thumb src={product.image} className="hl-photo" />
+                    <Thumb src={product.image} className="hl-photo" eager={index < 3} />
                     <span className="plus" aria-hidden="true">
                       +
                     </span>

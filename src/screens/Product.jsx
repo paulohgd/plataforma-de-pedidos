@@ -194,7 +194,7 @@ export default function Product() {
       </header>
 
       <section className="hero">
-        <Thumb src={product.image} alt={product.name} className="hero-photo" />
+        <Thumb src={product.image} alt={product.name} className="hero-photo" size={0} eager />
         <div className="hero-copy">
           <h1>{product.name}</h1>
           {product.description ? <p className="desc">{product.description}</p> : null}
