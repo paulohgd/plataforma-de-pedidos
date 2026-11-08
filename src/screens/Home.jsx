@@ -98,7 +98,13 @@ export default function Home() {
               type="button"
               className="icon-btn"
               aria-label="Compartilhar"
-              onClick={() => share(`${window.location.origin}/loja/${shop.slug}`, shopPageTitle(shop.name))}
+              onClick={() =>
+                share(
+                  `${window.location.origin}/loja/${shop.slug}`,
+                  shopPageTitle(shop.name),
+                  [shopPageTitle(shop.name), shop.hours].filter(Boolean).join(" · "),
+                )
+              }
             >
               <IconShare />
             </button>

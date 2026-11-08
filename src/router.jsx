@@ -122,10 +122,10 @@ export function UIProvider({ children }) {
     go(slug ? { name: "home", slug } : { name: "stores", slug: null }, shopPath(slug));
   }
 
-  async function share(url, title) {
+  async function share(url, title, text = title) {
     try {
       if (navigator.share) {
-        await navigator.share({ title, text: title, url });
+        await navigator.share({ title, text, url });
         return;
       }
     } catch (error) {
