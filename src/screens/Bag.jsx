@@ -1,12 +1,13 @@
 import { useCatalog } from "../catalog";
 import { money } from "../format";
 import { cleanMinOrder } from "../freight";
+import { formatOption } from "../order";
 import { useCart } from "../cart";
 import { useUI } from "../router";
 import { BottomNav, PageHead, Thumb } from "../ui";
 
 function summary(line) {
-  const parts = line.options.map((option) => (option.qty > 1 ? `${option.qty}x ${option.name}` : option.name));
+  const parts = line.options.map((option) => formatOption(line, option));
   if (line.note) parts.push(line.note);
   return parts.join(" · ");
 }

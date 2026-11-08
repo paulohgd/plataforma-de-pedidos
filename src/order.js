@@ -11,6 +11,19 @@ function shortGroup(name) {
   return name;
 }
 
+export function optionTotalQty(line, option) {
+  const packs = Math.max(1, Number(line?.qty) || 1);
+  const each = Math.max(0, Number(option?.qty) || 0);
+  return packs * each;
+}
+
+export function formatOption(line, option) {
+  const count = optionTotalQty(line, option);
+  const name = option?.name || "";
+  if (!count) return name;
+  return `${count}x ${name}`;
+}
+
 export function paymentMethodName(kind = "card") {
   if (kind === "pix") return "Pix";
   if (kind === "google_pay") return "Google Pay";
@@ -53,9 +66,8 @@ export function buildOrderText({ shop, customer, lines, total, paid = false, pay
 
   for (const line of lines) {
     out.push(`${line.qty}x ${line.product.name} — ${money(line.total)}`);
-    for (const option of line.options) {
-      const times = option.qty > 1 ? `${option.qty}x ` : "";
-      out.push(`   • ${shortGroup(option.groupName)}: ${times}${option.name}`);
+    for (const option of line.options || []) {
+      out.push(`   • ${shortGroup(option.groupName || "")}: ${formatOption(line, option)}`);
     }
     if (line.note) out.push(`   _Obs: ${line.note}_`);
   }

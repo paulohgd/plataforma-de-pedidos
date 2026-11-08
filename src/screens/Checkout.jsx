@@ -6,6 +6,7 @@ import { formatPhone, money, phoneDigits, validPhone } from "../format";
 import { cleanCouponCode, couponDiscount, findCoupon } from "../coupons";
 import { cleanMinOrder, deliveryFeeLabel, deliveryRulesHint } from "../freight";
 import { useCart } from "../cart";
+import { formatOption } from "../order";
 import { checkoutSessionId, fetchCheckoutSession, rememberCheckoutSession } from "../pay";
 import { useUI } from "../router";
 import { PageHead } from "../ui";
@@ -706,6 +707,9 @@ export default function Checkout() {
               <p key={line.id}>
                 <span>
                   {line.qty}x {line.product.name}
+                  {line.options?.length
+                    ? ` · ${line.options.map((option) => formatOption(line, option)).join(" · ")}`
+                    : ""}
                 </span>
                 <span>{money(line.total)}</span>
               </p>

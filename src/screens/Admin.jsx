@@ -8,6 +8,7 @@ import { cleanDeliveryFees, defaultDeliveryMaxKm } from "../freight";
 import ImageCrop from "../ImageCrop";
 import { validateImageFile } from "../images";
 import { PaidCopy } from "../PaidCopy";
+import { formatOption } from "../order";
 import { fetchShopOrders, fetchShopSecretStatus } from "../remote";
 import { useUI } from "../router";
 import { IconCalendar, PageHead, Thumb } from "../ui";
@@ -803,7 +804,13 @@ function AdminPanel() {
               </p>
               {order.customer_mode === "entrega" && order.customer_address ? <p className="muted">{order.customer_address}</p> : null}
               <p className="muted">
-                {(order.items || []).map((item) => `${item.qty}x ${item.name}`).join(" · ")}
+                {(order.items || [])
+                  .map((item) => {
+                    const extras = (item.options || []).map((option) => formatOption(item, option));
+                    const label = item.qty != null ? `${item.qty}x ${item.name}` : item.name;
+                    return extras.length ? `${label} (${extras.join(", ")})` : label;
+                  })
+                  .join(" · ")}
               </p>
             </article>
               );
