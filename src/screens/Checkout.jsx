@@ -34,7 +34,6 @@ export default function Checkout() {
   const [paying, setPaying] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [method, setMethod] = useState("pix");
-  const [cardKind, setCardKind] = useState("credit");
   const [pixCopy, setPixCopy] = useState("");
   const [pixExpiresAt, setPixExpiresAt] = useState(0);
   const [now, setNow] = useState(() => Date.now());
@@ -115,9 +114,6 @@ export default function Checkout() {
           paymentMethods: {
             minInstallments: 1,
             maxInstallments: 1,
-            types: {
-              excluded: cardKind === "debit" ? ["credit_card"] : ["debit_card"],
-            },
           },
           visual: {
             hidePaymentButton: true,
@@ -147,7 +143,7 @@ export default function Checkout() {
       brickRef.current?.unmount?.();
       brickRef.current = null;
     };
-  }, [paying, method, cardKind, mpKey, sessionId, payTotal, payerEmail]);
+  }, [paying, method, mpKey, sessionId, payTotal, payerEmail]);
 
   useEffect(() => {
     if (customer.mode !== "entrega") {
@@ -492,27 +488,7 @@ export default function Checkout() {
               <p className="hint">Toque em Pagar para gerar o código Pix (copia e cola).</p>
             )
           ) : null}
-          {method === "card" ? (
-            <>
-              <div className="pay-tabs">
-                <button
-                  type="button"
-                  className={cardKind === "credit" ? "choice on" : "choice"}
-                  onClick={() => setCardKind("credit")}
-                >
-                  Crédito
-                </button>
-                <button
-                  type="button"
-                  className={cardKind === "debit" ? "choice on" : "choice"}
-                  onClick={() => setCardKind("debit")}
-                >
-                  Débito
-                </button>
-              </div>
-              {!cardReady ? <p className="hint">Carregando o cartão…</p> : null}
-            </>
-          ) : null}
+          {method === "card" && !cardReady ? <p className="hint">Carregando o cartão…</p> : null}
           <div id="mp-card-brick" className="pay-box" hidden={method !== "card"} />
           {error ? <p className="form-error">{error}</p> : null}
           {method === "pix" && pixAlive ? null : (
