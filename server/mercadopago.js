@@ -11,10 +11,18 @@ export function firstPayment(order) {
   return order?.transactions?.payments?.[0] || null;
 }
 
+function paidStatus(value) {
+  const status = String(value || "").toLowerCase();
+  return ["processed", "approved", "accredited", "paid"].includes(status);
+}
+
 export function mpOrderPaid(order) {
-  const status = String(order?.status || "").toLowerCase();
-  if (status === "processed") return true;
-  return String(firstPayment(order)?.status || "").toLowerCase() === "processed";
+  if (!order) return false;
+  const payment = firstPayment(order);
+  if (paidStatus(order.status) || paidStatus(order.status_detail)) return true;
+  if (paidStatus(payment?.status) || paidStatus(payment?.status_detail)) return true;
+  const paidAmount = Number(order.total_paid_amount || payment?.paid_amount || 0);
+  return paidAmount > 0 && !closedStatus(order.status) && !closedStatus(payment?.status);
 }
 
 function closedStatus(value) {
@@ -86,8 +94,8 @@ export async function mpFetch(accessToken, { method = "GET", path, body, idempot
   const headers = {
     Authorization: `Bearer ${accessToken}`,
     Accept: "application/json",
-    "Content-Type": "application/json",
   };
+  if (body) headers["Content-Type"] = "application/json";
   if (idempotencyKey) headers["X-Idempotency-Key"] = idempotencyKey;
   const response = await fetch(`${API}${path}`, {
     method,
@@ -115,6 +123,25 @@ export async function createMpOrder(accessToken, body, idempotencyKey = randomUU
 
 export async function getMpOrder(accessToken, id) {
   return mpFetch(accessToken, { path: `/v1/orders/${encodeURIComponent(id)}` });
+}
+
+export async function searchMpOrderByRef(accessToken, externalReference) {
+  const ref = String(externalReference || "").trim();
+  if (!ref) return null;
+  const end = new Date(Date.now() + 60 * 1000);
+  const begin = new Date(end.getTime() - 3 * 24 * 60 * 60 * 1000);
+  const qs = new URLSearchParams({
+    external_reference: ref,
+    begin_date: begin.toISOString(),
+    end_date: end.toISOString(),
+    page_size: "10",
+    sort_by: "last_updated_date",
+    sort_order: "desc",
+  });
+  const payload = await mpFetch(accessToken, { path: `/v1/orders?${qs}` });
+  const rows = payload?.data || payload?.results || [];
+  if (!Array.isArray(rows) || !rows.length) return null;
+  return rows.find((row) => mpOrderPaid(row)) || rows[0];
 }
 
 export async function cancelMpOrder(accessToken, id) {

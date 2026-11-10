@@ -257,7 +257,7 @@ export default function Checkout() {
       }
     }
     tick();
-    const timer = setInterval(tick, 4000);
+    const timer = setInterval(tick, 2000);
     return () => {
       cancel = true;
       clearInterval(timer);

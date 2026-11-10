@@ -15,6 +15,7 @@ import {
   cancelMpOrder,
   createMpOrder,
   getMpOrder,
+  searchMpOrderByRef,
   moneyAmount,
   mpOrderClosed,
   mpOrderPaid,
@@ -237,15 +238,25 @@ async function settleOrder(existing) {
   if (!existing) return existing;
   if (existing.status === "paid") return existing;
   const token = await accessTokenForShop(existing.shop_id);
+  if (!token) return existing;
   const mpId = mpOrderId(existing.stripe_session_id);
-  if (!token || !mpId) return existing;
-  try {
-    const mpOrder = await getMpOrder(token, mpId);
-    return applyMpOrder(existing, mpOrder);
-  } catch (error) {
-    console.error("Consulta do Mercado Pago:", error.message);
-    return existing;
+  let mpOrder = null;
+  if (mpId) {
+    try {
+      mpOrder = await getMpOrder(token, mpId);
+    } catch (error) {
+      console.error("Consulta do Mercado Pago:", error.message);
+    }
   }
+  if (!mpOrderPaid(mpOrder)) {
+    try {
+      mpOrder = (await searchMpOrderByRef(token, existing.id)) || mpOrder;
+    } catch (error) {
+      console.error("Busca do Mercado Pago:", error.message);
+    }
+  }
+  if (!mpOrder) return existing;
+  return applyMpOrder(existing, mpOrder);
 }
 
 async function loadOrderBySession(sessionId) {
