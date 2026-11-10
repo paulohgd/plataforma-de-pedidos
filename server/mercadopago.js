@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 const API = "https://api.mercadopago.com";
-export const PIX_MS = 30 * 60 * 1000;
+export const PIX_MS = 5 * 60 * 1000;
 
 export function moneyAmount(value) {
   return Number(value || 0).toFixed(2);

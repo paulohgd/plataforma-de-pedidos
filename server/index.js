@@ -553,7 +553,7 @@ async function createPix(request, response) {
       mpPublicKey: asMpKey(shopKeys?.mp_public_key) || asMpKey(shopKeys?.stripe_publishable_key),
     });
     if (isMpTestMode(publicKey, token)) payer.first_name = "APRO";
-    let created = await createMpOrder(token, {
+    const pixBody = (expiration) => ({
       type: "online",
       processing_mode: "automatic",
       total_amount: amount,
@@ -566,11 +566,18 @@ async function createPix(request, response) {
           {
             amount,
             payment_method: { id: "pix", type: "bank_transfer" },
-            expiration_time: "PT30M",
+            ...(expiration ? { expiration_time: expiration } : {}),
           },
         ],
       },
     });
+    let created;
+    try {
+      created = await createMpOrder(token, pixBody("PT5M"));
+    } catch (error) {
+      if (!/expir/i.test(error.message || "")) throw error;
+      created = await createMpOrder(token, pixBody("PT30M"));
+    }
     if (created?.id && !mpOrderPaid(created) && !pixFromOrder(created).pixCopy) {
       await new Promise((resolve) => setTimeout(resolve, 1500));
       created = (await getMpOrder(token, created.id).catch(() => null)) || created;
