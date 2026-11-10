@@ -222,9 +222,15 @@ async function markCanceled(orderId, mpOrder) {
   return (await supabase.from("orders").select("*").eq("id", orderId).maybeSingle()).data || null;
 }
 
+function sameMpReference(existing, mpOrder) {
+  const ref = String(mpOrder?.external_reference || "").trim();
+  return !ref || ref === String(existing?.id || "");
+}
+
 async function applyMpOrder(existing, mpOrder) {
   if (!existing || !mpOrder) return existing;
   if (existing.status === "paid") return existing;
+  if (!sameMpReference(existing, mpOrder)) return existing;
   if (mpOrderPaid(mpOrder)) return (await fulfill(existing.id, mpOrder)) || existing;
   if (mpOrderClosed(mpOrder)) return (await markCanceled(existing.id, mpOrder)) || existing;
   return existing;

@@ -16,13 +16,26 @@ function paidStatus(value) {
   return ["processed", "approved", "accredited", "paid"].includes(status);
 }
 
+function waitingStatus(value) {
+  const status = String(value || "").toLowerCase();
+  return [
+    "action_required",
+    "pending",
+    "created",
+    "waiting_transfer",
+    "waiting_payment",
+    "pending_waiting_transfer",
+    "pending_waiting_payment",
+  ].includes(status);
+}
+
 export function mpOrderPaid(order) {
   if (!order) return false;
   const payment = firstPayment(order);
-  if (paidStatus(order.status) || paidStatus(order.status_detail)) return true;
-  if (paidStatus(payment?.status) || paidStatus(payment?.status_detail)) return true;
-  const paidAmount = Number(order.total_paid_amount || payment?.paid_amount || 0);
-  return paidAmount > 0 && !closedStatus(order.status) && !closedStatus(payment?.status);
+  const statuses = [order.status, order.status_detail, payment?.status, payment?.status_detail];
+  if (statuses.some(waitingStatus) || statuses.some(closedStatus)) return false;
+  if (statuses.some(paidStatus)) return true;
+  return Boolean(order.paid_at || payment?.paid_at || payment?.date_approved);
 }
 
 function closedStatus(value) {
@@ -134,14 +147,12 @@ export async function searchMpOrderByRef(accessToken, externalReference) {
     external_reference: ref,
     begin_date: begin.toISOString(),
     end_date: end.toISOString(),
-    page_size: "10",
-    sort_by: "last_updated_date",
-    sort_order: "desc",
   });
   const payload = await mpFetch(accessToken, { path: `/v1/orders?${qs}` });
-  const rows = payload?.data || payload?.results || [];
-  if (!Array.isArray(rows) || !rows.length) return null;
-  return rows.find((row) => mpOrderPaid(row)) || rows[0];
+  const rows = (payload?.data || payload?.results || []).filter(
+    (row) => String(row?.external_reference || "") === ref && mpOrderPaid(row),
+  );
+  return rows[0] || null;
 }
 
 export async function cancelMpOrder(accessToken, id) {
