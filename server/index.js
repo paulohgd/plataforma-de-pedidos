@@ -539,7 +539,7 @@ async function createPix(request, response) {
           return;
         }
         const current = pixFromOrder(previous);
-        if (current.pixCopy) {
+        if (current.expiresAt > Date.now()) {
           json(response, 200, current);
           return;
         }

@@ -44,11 +44,9 @@ export function pixFromOrder(order) {
   if (mpOrderPaid(order)) return { paid: true, pixCopy: "", expiresAt: 0 };
   const method = firstPayment(order)?.payment_method || {};
   const copy = String(method.qr_code || "").trim();
-  const status = String(order?.status || firstPayment(order)?.status || "").toLowerCase();
-  const waiting = status === "action_required" || status === "pending";
-  if (!copy || !waiting) return { paid: false, pixCopy: "", expiresAt: 0 };
-  const created = Date.parse(order?.created_date || order?.date_created || "") || Date.now();
-  return { paid: false, pixCopy: copy, expiresAt: created + PIX_MS };
+  const created = Date.parse(order?.created_date || order?.date_created || "") || 0;
+  const expiresAt = created ? created + PIX_MS : 0;
+  return { paid: false, pixCopy: copy, expiresAt };
 }
 
 export function mpPhone(whatsapp) {

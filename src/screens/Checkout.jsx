@@ -251,13 +251,7 @@ export default function Checkout() {
       try {
         const { payload } = await fetchCheckoutSession(sessionId);
         if (cancel) return;
-        if (payload.paid) {
-          goPaid();
-          return;
-        }
-        if (payload.canceled) {
-          setPixExpiresAt((current) => (current && current > Date.now() ? Date.now() - 1 : current || Date.now() - 1));
-        }
+        if (payload.paid) goPaid();
       } catch {
         /* o webhook ainda pode confirmar o pedido */
       }
@@ -377,6 +371,7 @@ export default function Checkout() {
     setError("");
     try {
       if (method === "pix") {
+        if (pixAlive) return;
         const response = await fetch("/api/create-pix", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -384,11 +379,12 @@ export default function Checkout() {
         });
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || "Não foi possível gerar o Pix.");
-        if (payload.pixCopy) {
-          setPixCopy(payload.pixCopy);
-          setPixExpiresAt(Number(payload.expiresAt || 0));
+        if (payload.paid) {
+          goPaid();
+          return;
         }
-        if (payload.paid) goPaid();
+        if (payload.pixCopy) setPixCopy(payload.pixCopy);
+        if (payload.expiresAt) setPixExpiresAt(Number(payload.expiresAt));
         return;
       }
       const brick = brickRef.current;
