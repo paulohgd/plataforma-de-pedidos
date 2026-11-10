@@ -17,6 +17,21 @@ export function mpOrderPaid(order) {
   return String(firstPayment(order)?.status || "").toLowerCase() === "processed";
 }
 
+function closedStatus(value) {
+  const status = String(value || "").toLowerCase();
+  return ["canceled", "cancelled", "expired", "failed", "rejected"].includes(status);
+}
+
+export function mpOrderClosed(order) {
+  const payment = firstPayment(order);
+  return (
+    closedStatus(order?.status) ||
+    closedStatus(order?.status_detail) ||
+    closedStatus(payment?.status) ||
+    closedStatus(payment?.status_detail)
+  );
+}
+
 export function paymentKindFromOrder(order) {
   const payment = firstPayment(order) || {};
   const type = String(payment.payment_method?.type || "").toLowerCase();

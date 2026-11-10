@@ -251,8 +251,13 @@ export default function Checkout() {
       try {
         const { payload } = await fetchCheckoutSession(sessionId);
         if (cancel) return;
-        if (!payload.paid) return;
-        goPaid();
+        if (payload.paid) {
+          goPaid();
+          return;
+        }
+        if (payload.canceled) {
+          setPixExpiresAt((current) => (current && current > Date.now() ? Date.now() - 1 : current || Date.now() - 1));
+        }
       } catch {
         /* o webhook ainda pode confirmar o pedido */
       }

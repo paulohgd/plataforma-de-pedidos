@@ -16,6 +16,7 @@ import {
   createMpOrder,
   getMpOrder,
   moneyAmount,
+  mpOrderClosed,
   mpOrderPaid,
   mpPublicError,
   payerFromOrder,
@@ -201,6 +202,37 @@ function firstPaymentId(mpOrder) {
   return mpOrder?.transactions?.payments?.[0]?.id || "";
 }
 
+async function markCanceled(orderId, mpOrder) {
+  if (!orderId) return null;
+  const paymentId = String(firstPaymentId(mpOrder) || "");
+  const { data, error } = await supabase
+    .from("orders")
+    .update({
+      status: "canceled",
+      stripe_session_id: String(mpOrder?.id || ""),
+      stripe_payment_intent: paymentId,
+    })
+    .eq("id", orderId)
+    .eq("status", "pending")
+    .select("*")
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (data) return data;
+  return (await supabase.from("orders").select("*").eq("id", orderId).maybeSingle()).data || null;
+}
+
+async function applyMpOrder(existing, mpOrder) {
+  if (!existing || !mpOrder) return existing;
+  if (existing.status === "paid") return existing;
+  if (mpOrderPaid(mpOrder)) return (await fulfill(existing.id, mpOrder)) || existing;
+  if (mpOrderClosed(mpOrder)) return (await markCanceled(existing.id, mpOrder)) || existing;
+  return existing;
+}
+
+async function reopenPending(orderId) {
+  await supabase.from("orders").update({ status: "pending" }).eq("id", orderId).eq("status", "canceled");
+}
+
 async function settleOrder(existing) {
   if (!existing) return existing;
   if (existing.status === "paid") return existing;
@@ -209,7 +241,7 @@ async function settleOrder(existing) {
   if (!token || !mpId) return existing;
   try {
     const mpOrder = await getMpOrder(token, mpId);
-    return (await fulfill(existing.id, mpOrder)) || existing;
+    return applyMpOrder(existing, mpOrder);
   } catch (error) {
     console.error("Consulta do Mercado Pago:", error.message);
     return existing;
@@ -417,9 +449,11 @@ async function readSession(request, response) {
   const order = await settleOrder(existing);
   const shop = await shopCopy(order.shop_id);
   const paid = order.status === "paid";
+  const canceled = order.status === "canceled";
   const text = paid ? order.whatsapp_text || orderTextFromRow(shop, order) : "";
   json(response, 200, {
     paid,
+    canceled,
     paidTitle: shop?.paid_title || paidTitle,
     paidMessage: shop?.paid_message || paidMessage,
     whatsappUrl: paid ? whatsappOrderUrl(shop, text) : "",
@@ -488,6 +522,7 @@ async function createPix(request, response) {
     json(response, 200, { paid: true, pixCopy: "", expiresAt: 0 });
     return;
   }
+  if (existing.status === "canceled") await reopenPending(existing.id);
   const token = await accessTokenForShop(existing.shop_id);
   if (!token) {
     json(response, 503, { error: "Falta configurar as chaves do Mercado Pago nas configurações da loja." });
@@ -577,6 +612,7 @@ async function payCard(request, response) {
     json(response, 200, { paid: true });
     return;
   }
+  if (existing.status === "canceled") await reopenPending(existing.id);
   const token = String(payload.token || "").trim();
   const paymentMethodId = String(payload.paymentMethodId || "").trim().toLowerCase();
   const paymentType = String(payload.paymentTypeId || "credit_card").trim().toLowerCase();
@@ -696,10 +732,12 @@ async function handleWebhook(request, response, url) {
   }
 
   try {
-    await settleOrder({
+    const current = {
       ...existing,
       stripe_session_id: mpId || existing.stripe_session_id,
-    });
+    };
+    const settled = await settleOrder(current);
+    if (settled?.status === "pending") await applyMpOrder(current, data);
   } catch (error) {
     console.error("Webhook:", error.message);
   }
