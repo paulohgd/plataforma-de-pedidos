@@ -75,7 +75,7 @@ export default defineConfig(({ mode }) => {
           manualChunks(id) {
             if (!id.includes("node_modules")) return;
             if (id.includes("@supabase")) return "supabase";
-            if (id.includes("@stripe")) return "stripe";
+            if (id.includes("@mercadopago")) return "mercadopago";
             if (id.includes("react-dom") || id.includes(`${path.sep}react${path.sep}`) || id.includes("/react/")) return "react";
           },
         },

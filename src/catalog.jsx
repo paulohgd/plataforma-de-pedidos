@@ -1,6 +1,7 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, createContext } from "react";
 import { authRedirectTo, clearAuthCallbackUrl, readAuthCallbackError } from "./authCallback";
 import { paidMessage, paidTitle, shop as defaultShop } from "./config";
+import { isMpCredential } from "./mp";
 import { norm, slugify } from "./format";
 import { cleanCoupons } from "./coupons";
 import { cleanDeliveryFees, cleanDeliveryMaxKm, cleanMinOrder, defaultDeliveryFees, defaultDeliveryMaxKm } from "./freight";
@@ -47,7 +48,7 @@ function blankStore() {
       open: true,
       openLabel: defaultShop.openLabel,
       closedLabel: defaultShop.closedLabel,
-      stripePublishableKey: "",
+      mpPublicKey: "",
       paidTitle,
       paidMessage,
       logo: "",
@@ -73,7 +74,7 @@ function cleanShop(shop) {
     open: source.open !== false,
     openLabel: String(source.openLabel || defaultShop.openLabel).trim().slice(0, 60) || defaultShop.openLabel,
     closedLabel: String(source.closedLabel || defaultShop.closedLabel).trim().slice(0, 80) || defaultShop.closedLabel,
-    stripePublishableKey: String(source.stripePublishableKey || "").trim(),
+    mpPublicKey: String(source.mpPublicKey || "").trim(),
     paidTitle: String(source.paidTitle || paidTitle).trim().slice(0, 80) || paidTitle,
     paidMessage: String(source.paidMessage || paidMessage).trim().slice(0, 800) || paidMessage,
     logo: String(source.logo || "").trim(),
@@ -536,9 +537,9 @@ export function CatalogProvider({ children }) {
       if (!String(shop.name || "").trim()) return "Informe o nome da loja.";
       const digits = String(shop.whatsapp || "").replace(/\D/g, "");
       if (digits && digits.length < 12) return "O WhatsApp precisa ter DDI e DDD. Exemplo: 5511987654321.";
-      const publishable = String(shop.stripePublishableKey || "").trim();
-      if (publishable && !/^pk_/.test(publishable)) {
-        return "A chave publicável da Stripe deve começar com pk_.";
+      const publishable = String(shop.mpPublicKey || "").trim();
+      if (publishable && !isMpCredential(publishable)) {
+        return "A chave pública do Mercado Pago deve começar com TEST- ou APP_USR-.";
       }
       let logo = String(shop.logo || "").trim();
       if (logo && !logo.startsWith("data:image/") && !/^https?:\/\//i.test(logo)) {
@@ -550,12 +551,12 @@ export function CatalogProvider({ children }) {
         if (uploaded.error) return uploaded.error;
         logo = uploaded.url;
       }
-      const nextShop = cleanShop({ ...store.shop, ...shop, whatsapp: digits, stripePublishableKey: publishable, logo });
+      const nextShop = cleanShop({ ...store.shop, ...shop, whatsapp: digits, mpPublicKey: publishable, logo });
       nextShop.slug = slugify(nextShop.name);
       const error = await saveShopRow(store.shopId, nextShop);
       if (error) return error;
       const secretError = await saveShopSecrets(store.shopId, {
-        stripeSecretKey: shop.stripeSecretKey,
+        mpAccessToken: shop.mpAccessToken,
         discordWebhookUrl: shop.discordWebhookUrl,
       });
       if (secretError) return secretError;

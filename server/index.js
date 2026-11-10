@@ -1,18 +1,29 @@
 import "./env.js";
 import http from "node:http";
-import Stripe from "stripe";
 import WebSocket from "ws";
 import { createClient } from "@supabase/supabase-js";
 import { paidMessage, paidTitle } from "../src/config.js";
 import { cleanCouponCode, couponDiscount, findCoupon } from "../src/coupons.js";
 import { checkoutEmail, fullPhone, validPhone } from "../src/format.js";
 import { formatKm } from "../src/freight.js";
-import { buildOrderText, paymentKindFromStripe, whatsappOrderUrl } from "../src/order.js";
-import { cents, quoteCart } from "./quote.js";
+import { asMpKey, isMpTestKey } from "../src/mp.js";
+import { buildOrderText, whatsappOrderUrl } from "../src/order.js";
+import { quoteCart } from "./quote.js";
 import { sendShopDiscord } from "./discord.js";
 import { quoteDelivery } from "./freight.js";
+import {
+  cancelMpOrder,
+  createMpOrder,
+  getMpOrder,
+  moneyAmount,
+  mpOrderPaid,
+  mpPublicError,
+  payerFromOrder,
+  paymentKindFromOrder,
+  pixFromOrder,
+} from "./mercadopago.js";
 import { isShopPage, sendShopPage } from "./shopPage.js";
-import { allowedOrigin, publicError, readBody, readJson, securityHeaders, tooMany } from "./security.js";
+import { publicError, readBody, readJson, securityHeaders, tooMany } from "./security.js";
 
 const port = Number(process.env.PORT) || 8787;
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
@@ -25,24 +36,37 @@ const supabase =
         realtime: { transport: WebSocket },
       })
     : null;
-const stripeClients = new Map();
 const notifiedOrders = new Set();
 
+function envMpPublicKey() {
+  return asMpKey(process.env.MP_PUBLIC_KEY);
+}
+
+function envMpAccessToken() {
+  return asMpKey(process.env.MP_ACCESS_TOKEN);
+}
+
 async function loadShopSecrets(shopId) {
-  if (!supabase || !shopId) return { stripeSecret: "", discordWebhook: "" };
+  if (!supabase || !shopId) return { mpAccessToken: "", discordWebhook: "" };
   const { data, error } = await supabase.from("shop_secrets").select("*").eq("shop_id", shopId).maybeSingle();
-  if (error || !data) return { stripeSecret: "", discordWebhook: "" };
+  if (error || !data) return { mpAccessToken: "", discordWebhook: "" };
   return {
-    stripeSecret: String(data.stripe_secret_key || "").trim(),
+    mpAccessToken: envMpAccessToken() || asMpKey(data.mp_access_token) || asMpKey(data.stripe_secret_key),
     discordWebhook: String(data.discord_webhook_url || "").trim(),
   };
 }
 
-async function stripeForShop(shopId) {
-  const { stripeSecret } = await loadShopSecrets(shopId);
-  if (!stripeSecret) return null;
-  if (!stripeClients.has(stripeSecret)) stripeClients.set(stripeSecret, new Stripe(stripeSecret));
-  return stripeClients.get(stripeSecret);
+async function accessTokenForShop(shopId) {
+  const { mpAccessToken } = await loadShopSecrets(shopId);
+  return mpAccessToken || "";
+}
+
+function shopPublicKey(shop) {
+  return envMpPublicKey() || shop?.mpPublicKey || "";
+}
+
+function isMpTestMode(publicKey, accessToken) {
+  return isMpTestKey(publicKey) || isMpTestKey(accessToken);
 }
 
 function json(response, status, payload) {
@@ -72,7 +96,7 @@ async function loadShop(slug) {
       address: shop.address || "",
       cep: shop.cep || "",
       open: shop.is_open !== false,
-      stripePublishableKey: shop.stripe_publishable_key || "",
+      mpPublicKey: asMpKey(shop.mp_public_key) || asMpKey(shop.stripe_publishable_key),
       paidTitle: shop.paid_title || paidTitle,
       paidMessage: shop.paid_message || paidMessage,
       minOrder: shop.min_order,
@@ -98,29 +122,6 @@ async function loadShop(slug) {
     })),
     categories: categories || [],
   };
-}
-
-async function detectPayment(session, client) {
-  const stripeClient = client;
-  const intentId =
-    typeof session.payment_intent === "string"
-      ? session.payment_intent
-      : session.payment_intent?.id || "";
-  if (!intentId || !stripeClient) return "card";
-  try {
-    const intent = await stripeClient.paymentIntents.retrieve(intentId, {
-      expand: ["payment_method", "latest_charge"],
-    });
-    const charge = typeof intent.latest_charge === "object" ? intent.latest_charge : null;
-    const method = typeof intent.payment_method === "object" ? intent.payment_method : null;
-    return paymentKindFromStripe({
-      type: charge?.payment_method_details?.type || method?.type || "",
-      wallet: charge?.payment_method_details?.card?.wallet?.type || method?.card?.wallet?.type || "",
-    });
-  } catch (error) {
-    console.error("Forma de pagamento:", error.message);
-    return "card";
-  }
 }
 
 function orderTextFromRow(shop, order, payment) {
@@ -151,26 +152,23 @@ function orderTextFromRow(shop, order, payment) {
   });
 }
 
-function stripeOrderMeta(order, slug = "") {
-  return {
-    order_id: String(order.id || ""),
-    shop_id: String(order.shop_id || ""),
-    shop_slug: String(slug || "").slice(0, 80),
-  };
+function mpOrderId(value) {
+  const id = String(value || "").trim();
+  return /^ORD/i.test(id) ? id : "";
 }
 
-async function fulfill(session, client) {
-  if (!session || session.payment_status !== "paid") return null;
-  const orderId = session.metadata?.order_id;
-  if (!orderId) return null;
+async function fulfill(orderId, mpOrder) {
+  if (!orderId || !mpOrderPaid(mpOrder)) return null;
   const paidAt = new Date().toISOString();
-  const payment = await detectPayment(session, client);
+  const payment = paymentKindFromOrder(mpOrder);
+  const paymentId = String(firstPaymentId(mpOrder) || "");
   const { data, error } = await supabase
     .from("orders")
     .update({
       status: "paid",
       paid_at: paidAt,
-      stripe_payment_intent: String(session.payment_intent || ""),
+      stripe_session_id: String(mpOrder.id || ""),
+      stripe_payment_intent: paymentId,
     })
     .eq("id", orderId)
     .neq("status", "paid")
@@ -199,38 +197,38 @@ async function fulfill(session, client) {
   return (await supabase.from("orders").select("*").eq("id", orderId).maybeSingle()).data || null;
 }
 
-async function fulfillPaidIntent(orderId, intentId, client) {
-  if (!orderId || !intentId || !client) return null;
-  const intent = await client.paymentIntents.retrieve(intentId);
-  if (intent.status !== "succeeded") return null;
-  const metaOrder = String(intent.metadata?.order_id || "");
-  if (metaOrder && metaOrder !== String(orderId)) return null;
-  return fulfill(
-    {
-      payment_status: "paid",
-      payment_intent: intent.id,
-      metadata: { order_id: orderId },
-    },
-    client,
-  );
+function firstPaymentId(mpOrder) {
+  return mpOrder?.transactions?.payments?.[0]?.id || "";
 }
 
-async function settleOrder(existing, client) {
-  if (!existing || !client) return existing;
+async function settleOrder(existing) {
+  if (!existing) return existing;
   if (existing.status === "paid") return existing;
-  if (existing.stripe_payment_intent) {
-    try {
-      const intent = await client.paymentIntents.retrieve(existing.stripe_payment_intent);
-      if (intent.status === "succeeded") {
-        return (await fulfillPaidIntent(existing.id, intent.id, client)) || existing;
-      }
-    } catch (error) {
-      console.error("Consulta do Pix:", error.message);
-    }
+  const token = await accessTokenForShop(existing.shop_id);
+  const mpId = mpOrderId(existing.stripe_session_id);
+  if (!token || !mpId) return existing;
+  try {
+    const mpOrder = await getMpOrder(token, mpId);
+    return (await fulfill(existing.id, mpOrder)) || existing;
+  } catch (error) {
+    console.error("Consulta do Mercado Pago:", error.message);
+    return existing;
   }
-  if (!existing.stripe_session_id) return existing;
-  const session = await client.checkout.sessions.retrieve(existing.stripe_session_id, { expand: ["payment_intent"] });
-  return (await fulfill(session, client)) || existing;
+}
+
+async function loadOrderBySession(sessionId) {
+  const id = String(sessionId || "").trim();
+  if (!id) return null;
+  const byId = (await supabase.from("orders").select("*").eq("id", id).maybeSingle()).data;
+  if (byId) return byId;
+  return (await supabase.from("orders").select("*").eq("stripe_session_id", id).maybeSingle()).data;
+}
+
+async function rememberMpOrder(orderId, mpOrder) {
+  const patch = { stripe_session_id: String(mpOrder?.id || "") };
+  const paymentId = firstPaymentId(mpOrder);
+  if (paymentId) patch.stripe_payment_intent = paymentId;
+  await supabase.from("orders").update(patch).eq("id", orderId);
 }
 
 async function createCheckout(request, response) {
@@ -276,10 +274,10 @@ async function createCheckout(request, response) {
     return;
   }
 
-  const shopStripe = await stripeForShop(store.shopId);
-  const publishableKey = store.shop.stripePublishableKey;
-  if (!shopStripe || !publishableKey) {
-    json(response, 503, { error: "Falta configurar as chaves Stripe nas configurações da loja." });
+  const accessToken = await accessTokenForShop(store.shopId);
+  const publicKey = shopPublicKey(store.shop);
+  if (!accessToken || !publicKey) {
+    json(response, 503, { error: "Falta configurar as chaves do Mercado Pago nas configurações da loja." });
     return;
   }
 
@@ -386,79 +384,11 @@ async function createCheckout(request, response) {
     return;
   }
 
-  const origin = allowedOrigin(request);
-  const returnUrl = `${origin}/loja/${encodeURIComponent(slug)}/pedido-pago?session_id={CHECKOUT_SESSION_ID}`;
-  const orderMeta = stripeOrderMeta({ ...order, shop_id: store.shopId }, slug);
-
-  try {
-    const session = await shopStripe.checkout.sessions.create({
-      mode: "payment",
-      ui_mode: "custom",
-      locale: "pt-BR",
-      customer_email: checkoutEmail(order.id),
-      customer_creation: "if_required",
-      name_collection: { individual: { enabled: false } },
-      return_url: returnUrl,
-      payment_method_types: ["card"],
-      payment_method_options: {
-        card: {
-          request_three_d_secure: "automatic",
-        },
-      },
-      expand: ["payment_intent"],
-      metadata: orderMeta,
-      payment_intent_data: {
-        metadata: orderMeta,
-      },
-      line_items: [
-        ...(discount > 0
-          ? cents(quoted.total - discount) > 0
-            ? [
-                {
-                  quantity: 1,
-                  price_data: {
-                    currency: "brl",
-                    unit_amount: cents(quoted.total - discount),
-                    product_data: {
-                      name: coupon ? `Pedido (${coupon.code} −${coupon.percent}%)` : "Pedido",
-                    },
-                  },
-                },
-              ]
-            : []
-          : quoted.lines.map((line) => ({
-              quantity: line.qty,
-              price_data: {
-                currency: "brl",
-                unit_amount: cents(line.unit),
-                product_data: {
-                  name: line.name,
-                  description: line.options.map((option) => option.name).join(", ").slice(0, 500) || undefined,
-                },
-              },
-            }))),
-        ...(delivery?.fee
-          ? [
-              {
-                quantity: 1,
-                price_data: {
-                  currency: "brl",
-                  unit_amount: cents(delivery.fee),
-                  product_data: { name: `Entrega (${formatKm(delivery.km)})` },
-                },
-              },
-            ]
-          : []),
-      ],
-    });
-
-    await supabase.from("orders").update({ stripe_session_id: session.id }).eq("id", order.id);
-    json(response, 200, { clientSecret: session.client_secret });
-  } catch (error) {
-    console.error("Checkout:", error.message);
-    await supabase.from("orders").update({ status: "canceled" }).eq("id", order.id);
-    json(response, 500, { error: "Não foi possível iniciar o pagamento." });
-  }
+  json(response, 200, {
+    sessionId: order.id,
+    publicKey,
+    payerEmail: checkoutEmail(order.id),
+  });
 }
 
 async function shopCopy(shopId) {
@@ -474,21 +404,17 @@ async function readSession(request, response) {
   }
   const payload = await readJson(request, 4096);
   const sessionId = String(payload.sessionId || "");
-  if (!sessionId.startsWith("cs_")) {
-    json(response, 400, { error: "Sessão de pagamento inválida." });
-    return;
-  }
-  const existing = (await supabase.from("orders").select("*").eq("stripe_session_id", sessionId).maybeSingle()).data;
-  const client = existing ? await stripeForShop(existing.shop_id) : null;
+  const existing = await loadOrderBySession(sessionId);
   if (!existing) {
     json(response, 404, { error: "Pedido não encontrado." });
     return;
   }
-  if (!client) {
-    json(response, 503, { error: "Falta configurar as chaves Stripe nas configurações da loja." });
+  const token = await accessTokenForShop(existing.shop_id);
+  if (!token) {
+    json(response, 503, { error: "Falta configurar as chaves do Mercado Pago nas configurações da loja." });
     return;
   }
-  const order = await settleOrder(existing, client);
+  const order = await settleOrder(existing);
   const shop = await shopCopy(order.shop_id);
   const paid = order.status === "paid";
   const text = paid ? order.whatsapp_text || orderTextFromRow(shop, order) : "";
@@ -534,21 +460,13 @@ async function quoteDeliveryRoute(request, response) {
   json(response, 200, quote);
 }
 
-const PIX_SECONDS = 15 * 60;
+function mpLocation(uf) {
+  const state = String(uf || "").trim().toUpperCase();
+  return state.length === 2 ? `BR-${state}` : "BR-SP";
+}
 
-function pixFromIntent(intent) {
-  if (!intent) return { paid: false, pixCopy: "", expiresAt: 0 };
-  if (intent.status === "succeeded") return { paid: true, pixCopy: "", expiresAt: 0 };
-  const pix = intent.next_action?.pix_display_qr_code;
-  const expiresAt =
-    Number(pix?.expires_at || 0) * 1000 ||
-    (Number(intent.created || 0) * 1000 + PIX_SECONDS * 1000);
-  const alive = Boolean(pix?.data) && expiresAt > Date.now();
-  return {
-    paid: false,
-    pixCopy: alive ? pix.data : "",
-    expiresAt: alive ? expiresAt : 0,
-  };
+function orderAmount(existing) {
+  return moneyAmount(existing.total);
 }
 
 async function createPix(request, response) {
@@ -561,83 +479,191 @@ async function createPix(request, response) {
     return;
   }
   const payload = await readJson(request, 4096);
-  const sessionId = String(payload.sessionId || "");
-  if (!sessionId.startsWith("cs_")) {
-    json(response, 400, { error: "Sessão de pagamento inválida." });
-    return;
-  }
-  const existing = (await supabase.from("orders").select("*").eq("stripe_session_id", sessionId).maybeSingle()).data;
+  const existing = await loadOrderBySession(payload.sessionId);
   if (!existing) {
     json(response, 404, { error: "Pedido não encontrado." });
     return;
   }
   if (existing.status === "paid") {
-    json(response, 200, { paid: true, pixCopy: "" });
+    json(response, 200, { paid: true, pixCopy: "", expiresAt: 0 });
     return;
   }
-  const shopStripe = await stripeForShop(existing.shop_id);
-  if (!shopStripe) {
-    json(response, 503, { error: "Falta configurar as chaves Stripe nas configurações da loja." });
+  const token = await accessTokenForShop(existing.shop_id);
+  if (!token) {
+    json(response, 503, { error: "Falta configurar as chaves do Mercado Pago nas configurações da loja." });
     return;
   }
   try {
-    if (existing.stripe_payment_intent) {
-      const previous = await shopStripe.paymentIntents.retrieve(existing.stripe_payment_intent);
-      const current = pixFromIntent(previous);
-      if (current.paid) {
-        await fulfillPaidIntent(existing.id, previous.id, shopStripe);
-        json(response, 200, { paid: true, pixCopy: "", expiresAt: 0 });
-        return;
-      }
-      if (current.pixCopy) {
-        json(response, 200, current);
-        return;
-      }
-      if (previous.status !== "canceled" && previous.status !== "succeeded") {
-        await shopStripe.paymentIntents.cancel(previous.id).catch(() => {});
+    const currentId = mpOrderId(existing.stripe_session_id);
+    if (currentId) {
+      const previous = await getMpOrder(token, currentId).catch(() => null);
+      if (previous) {
+        if (mpOrderPaid(previous)) {
+          await fulfill(existing.id, previous);
+          json(response, 200, { paid: true, pixCopy: "", expiresAt: 0 });
+          return;
+        }
+        const current = pixFromOrder(previous);
+        if (current.pixCopy) {
+          json(response, 200, current);
+          return;
+        }
+        await cancelMpOrder(token, currentId).catch(() => {});
       }
     }
-    const confirmed = await shopStripe.paymentIntents.create({
-      amount: cents(existing.total),
-      currency: "brl",
-      payment_method_types: ["pix"],
-      payment_method_data: { type: "pix" },
-      payment_method_options: { pix: { expires_after_seconds: PIX_SECONDS } },
-      confirm: true,
-      metadata: stripeOrderMeta(existing),
+    const amount = orderAmount(existing);
+    const payer = payerFromOrder(existing, checkoutEmail(existing.id));
+    const shopKeys = (await supabase.from("shops").select("mp_public_key, stripe_publishable_key").eq("id", existing.shop_id).maybeSingle()).data;
+    const publicKey = shopPublicKey({
+      mpPublicKey: asMpKey(shopKeys?.mp_public_key) || asMpKey(shopKeys?.stripe_publishable_key),
     });
-    await supabase.from("orders").update({ stripe_payment_intent: confirmed.id }).eq("id", existing.id);
-    json(response, 200, pixFromIntent(confirmed));
+    if (isMpTestMode(publicKey, token)) payer.first_name = "APRO";
+    let created = await createMpOrder(token, {
+      type: "online",
+      processing_mode: "automatic",
+      total_amount: amount,
+      external_reference: existing.id,
+      description: "Pedido",
+      payer,
+      config: { location: { state_id: mpLocation() } },
+      transactions: {
+        payments: [
+          {
+            amount,
+            payment_method: { id: "pix", type: "bank_transfer" },
+            expiration_time: "PT30M",
+          },
+        ],
+      },
+    });
+    if (created?.id && !mpOrderPaid(created) && !pixFromOrder(created).pixCopy) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      created = (await getMpOrder(token, created.id).catch(() => null)) || created;
+    }
+    await rememberMpOrder(existing.id, created);
+    if (mpOrderPaid(created)) {
+      await fulfill(existing.id, created);
+      json(response, 200, { paid: true, pixCopy: "", expiresAt: 0 });
+      return;
+    }
+    const pix = pixFromOrder(created);
+    if (!pix.pixCopy) {
+      json(response, 500, { error: "Não foi possível gerar o Pix." });
+      return;
+    }
+    json(response, 200, pix);
   } catch (error) {
     console.error("Pix:", error.message);
-    json(response, 500, { error: "Não foi possível gerar o Pix." });
+    json(response, 500, { error: mpPublicError(error, "Não foi possível gerar o Pix.") });
   }
 }
 
-async function findOrderFromEvent(object = {}) {
-  const sessionId = String(object.id || "").startsWith("cs_") ? object.id : "";
-  const intentId = String(object.id || "").startsWith("pi_")
-    ? object.id
-    : typeof object.payment_intent === "string"
-      ? object.payment_intent
-      : object.payment_intent?.id || "";
-  const orderId = String(object.metadata?.order_id || "");
+async function payCard(request, response) {
+  if (!supabase) {
+    json(response, 503, { error: "Pagamento ainda não está configurado no servidor." });
+    return;
+  }
+  if (tooMany(request, 12, 5 * 60 * 1000)) {
+    json(response, 429, { error: "Muitas tentativas. Espere um pouco e tente de novo." });
+    return;
+  }
+  const payload = await readJson(request, 8192);
+  const existing = await loadOrderBySession(payload.sessionId);
+  if (!existing) {
+    json(response, 404, { error: "Pedido não encontrado." });
+    return;
+  }
+  if (existing.status === "paid") {
+    json(response, 200, { paid: true });
+    return;
+  }
+  const token = String(payload.token || "").trim();
+  const paymentMethodId = String(payload.paymentMethodId || "").trim().toLowerCase();
+  const paymentType = String(payload.paymentTypeId || "credit_card").trim().toLowerCase();
+  const installments = Math.max(1, Number(payload.installments) || 1);
+  if (!token || !paymentMethodId) {
+    json(response, 400, { error: "Informe os dados do cartão." });
+    return;
+  }
+  const accessToken = await accessTokenForShop(existing.shop_id);
+  if (!accessToken) {
+    json(response, 503, { error: "Falta configurar as chaves do Mercado Pago nas configurações da loja." });
+    return;
+  }
+  try {
+    const currentId = mpOrderId(existing.stripe_session_id);
+    if (currentId) {
+      const previous = await getMpOrder(accessToken, currentId).catch(() => null);
+      if (previous && mpOrderPaid(previous)) {
+        await fulfill(existing.id, previous);
+        json(response, 200, { paid: true });
+        return;
+      }
+      if (previous && !mpOrderPaid(previous)) {
+        await cancelMpOrder(accessToken, currentId).catch(() => {});
+      }
+    }
+    const amount = orderAmount(existing);
+    const identification = payload.identification && payload.identification.number
+      ? {
+          type: String(payload.identification.type || "CPF").toUpperCase(),
+          number: String(payload.identification.number || "").replace(/\D/g, ""),
+        }
+      : null;
+    const payer = payerFromOrder(existing, checkoutEmail(existing.id));
+    if (identification) payer.identification = identification;
+    const created = await createMpOrder(accessToken, {
+      type: "online",
+      processing_mode: "automatic",
+      total_amount: amount,
+      external_reference: existing.id,
+      description: "Pedido",
+      payer,
+      config: { location: { state_id: mpLocation() } },
+      transactions: {
+        payments: [
+          {
+            amount,
+            payment_method: {
+              id: paymentMethodId,
+              type: paymentType === "debit_card" ? "debit_card" : "credit_card",
+              token,
+              installments,
+            },
+          },
+        ],
+      },
+    });
+    await rememberMpOrder(existing.id, created);
+    if (mpOrderPaid(created)) {
+      await fulfill(existing.id, created);
+      json(response, 200, { paid: true });
+      return;
+    }
+    json(response, 400, {
+      error: "O pagamento não foi aprovado. Tente outro cartão ou Pix.",
+    });
+  } catch (error) {
+    console.error("Cartão:", error.message);
+    json(response, 400, { error: mpPublicError(error, "Não foi possível pagar com cartão.") });
+  }
+}
+
+async function findOrderFromMp(data = {}) {
+  const orderId = String(data.external_reference || "").trim();
+  const mpId = mpOrderId(data.id);
   if (orderId) {
-    const { data } = await supabase.from("orders").select("id, shop_id, stripe_session_id").eq("id", orderId).maybeSingle();
-    if (data) return data;
+    const { data: row } = await supabase.from("orders").select("*").eq("id", orderId).maybeSingle();
+    if (row) return row;
   }
-  if (sessionId) {
-    const { data } = await supabase.from("orders").select("id, shop_id, stripe_session_id").eq("stripe_session_id", sessionId).maybeSingle();
-    if (data) return data;
-  }
-  if (intentId) {
-    const { data } = await supabase.from("orders").select("id, shop_id, stripe_session_id").eq("stripe_payment_intent", intentId).maybeSingle();
-    if (data) return data;
+  if (mpId) {
+    const { data: row } = await supabase.from("orders").select("*").eq("stripe_session_id", mpId).maybeSingle();
+    if (row) return row;
   }
   return null;
 }
 
-async function handleWebhook(request, response) {
+async function handleWebhook(request, response, url) {
   if (!supabase) {
     json(response, 200, { received: true });
     return;
@@ -651,45 +677,29 @@ async function handleWebhook(request, response) {
     return;
   }
 
-  const type = String(event.type || "");
-  const object = event.data?.object || {};
-  const useful =
-    type === "checkout.session.completed" ||
-    type === "checkout.session.async_payment_succeeded" ||
-    type === "payment_intent.succeeded";
-  if (!useful) {
+  const type = String(event.type || url.searchParams.get("type") || "").toLowerCase();
+  const data = event.data && typeof event.data === "object" ? event.data : {};
+  const mpId = mpOrderId(data.id || url.searchParams.get("data.id") || url.searchParams.get("id"));
+  if (type && type !== "order" && !mpId && !data.external_reference) {
     json(response, 200, { received: true });
     return;
   }
 
-  const order = await findOrderFromEvent(object);
-  const shopId = order?.shop_id || String(object.metadata?.shop_id || "");
-  const client = await stripeForShop(shopId);
-  if (!client) {
+  const existing = await findOrderFromMp({ ...data, id: mpId || data.id });
+  if (!existing) {
+    json(response, 200, { received: true });
+    return;
+  }
+  if (existing.status === "paid") {
     json(response, 200, { received: true });
     return;
   }
 
   try {
-    if (type === "payment_intent.succeeded") {
-      const orderId = order?.id || String(object.metadata?.order_id || "");
-      await fulfillPaidIntent(orderId, object.id, client);
-      json(response, 200, { received: true });
-      return;
-    }
-
-    let sessionId = String(object.id || "").startsWith("cs_") ? object.id : order?.stripe_session_id || "";
-    if (!sessionId && String(object.payment_intent || "").startsWith("pi_")) {
-      const listed = await client.checkout.sessions.list({ payment_intent: object.payment_intent, limit: 1 });
-      sessionId = listed.data[0]?.id || "";
-    }
-    if (!sessionId) {
-      json(response, 200, { received: true });
-      return;
-    }
-
-    const session = await client.checkout.sessions.retrieve(sessionId);
-    await fulfill(session, client);
+    await settleOrder({
+      ...existing,
+      stripe_session_id: mpId || existing.stripe_session_id,
+    });
   } catch (error) {
     console.error("Webhook:", error.message);
   }
@@ -720,12 +730,20 @@ const server = http.createServer(async (request, response) => {
       await createPix(request, response);
       return;
     }
+    if (request.method === "POST" && url.pathname === "/api/pay-card") {
+      await payCard(request, response);
+      return;
+    }
     if (request.method === "POST" && url.pathname === "/api/quote-delivery") {
       await quoteDeliveryRoute(request, response);
       return;
     }
-    if (request.method === "POST" && url.pathname === "/api/stripe-webhook") {
-      await handleWebhook(request, response);
+    if (request.method === "GET" && (url.pathname === "/api/mp-webhook" || url.pathname === "/api/stripe-webhook")) {
+      json(response, 200, { ok: true });
+      return;
+    }
+    if (request.method === "POST" && (url.pathname === "/api/mp-webhook" || url.pathname === "/api/stripe-webhook")) {
+      await handleWebhook(request, response, url);
       return;
     }
     if (isShopPage(request.method, url.pathname)) {
@@ -742,5 +760,6 @@ const server = http.createServer(async (request, response) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  console.log(`Pagamento em http://127.0.0.1:${port}`);
+  const localTest = isMpTestMode(envMpPublicKey(), envMpAccessToken());
+  console.log(`Pagamento em http://127.0.0.1:${port}${localTest ? " · Mercado Pago teste (.env.server)" : ""}`);
 });

@@ -10,11 +10,10 @@
     "pay": "node server/index.js"
   },
   "dependencies": {
-    "@stripe/stripe-js": "^8.11.0",
+    "@mercadopago/sdk-js": "^0.0.3",
     "@supabase/supabase-js": "^2.118.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "stripe": "^19.3.0",
     "ws": "^8.22.0"
   },
   "devDependencies": {

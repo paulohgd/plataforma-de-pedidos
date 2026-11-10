@@ -1,4 +1,5 @@
 import { paidMessage, paidTitle, shop as defaultShop } from "./config";
+import { asMpKey, isMpCredential } from "./mp";
 import { saoPauloDayBounds, slugify } from "./format";
 import { cleanCoupons } from "./coupons";
 import { cleanDeliveryFees, cleanDeliveryMaxKm, cleanMinOrder, defaultDeliveryFees } from "./freight";
@@ -11,7 +12,7 @@ export function explain(error) {
   if (/slug/i.test(message) && /column|schema cache/i.test(message)) {
     return "Falta atualizar a base. Rode o schema.sql de novo no Supabase.";
   }
-  if (code === "PGRST205" || code === "42P01" || /schema cache/i.test(message) || /shop_secrets|paid_title|stripe_publishable|item_types|\bactive\b|\blogo\b|\bcep\b|min_order|delivery_max|delivery_fees|\bcoupons\b/i.test(message)) {
+  if (code === "PGRST205" || code === "42P01" || /schema cache/i.test(message) || /shop_secrets|paid_title|stripe_publishable|mp_public|mp_access|item_types|\bactive\b|\blogo\b|\bcep\b|min_order|delivery_max|delivery_fees|\bcoupons\b/i.test(message)) {
     return "Falta atualizar a base. Rode o schema.sql de novo no Supabase.";
   }
   if (code === "23503") return "Essa categoria ainda tem produtos vinculados.";
@@ -61,7 +62,7 @@ function toStore(shop, categories, products, itemTypes) {
       open: shop.is_open !== false,
       openLabel: shop.open_label || defaultShop.openLabel,
       closedLabel: shop.closed_label || defaultShop.closedLabel,
-      stripePublishableKey: shop.stripe_publishable_key || "",
+      mpPublicKey: asMpKey(shop.mp_public_key) || asMpKey(shop.stripe_publishable_key),
       paidTitle: shop.paid_title || paidTitle,
       paidMessage: shop.paid_message || paidMessage,
       logo: shop.logo || "",
@@ -235,27 +236,27 @@ export async function deleteMyAccount(userId) {
 
 export async function fetchShopSecretStatus(shopId) {
   const { data, error } = await supabase.from("shop_secrets").select("*").eq("shop_id", shopId).maybeSingle();
-  if (error) return { error: explain(error), stripe: false, discord: false };
+  if (error) return { error: explain(error), mercadoPago: false, discord: false };
   return {
     error: "",
-    stripe: Boolean(String(data?.stripe_secret_key || "").trim()),
+    mercadoPago: Boolean(asMpKey(data?.mp_access_token) || asMpKey(data?.stripe_secret_key)),
     discord: Boolean(String(data?.discord_webhook_url || "").trim()),
   };
 }
 
-export async function saveShopSecrets(shopId, { stripeSecretKey, discordWebhookUrl }) {
-  const stripe = String(stripeSecretKey || "").trim();
+export async function saveShopSecrets(shopId, { mpAccessToken, discordWebhookUrl }) {
+  const token = String(mpAccessToken || "").trim();
   const discord = String(discordWebhookUrl || "").trim();
-  if (stripe && !/^(sk|pk|rk)_/.test(stripe)) {
-    return "Cole a chave da Stripe desta loja.";
+  if (token && !isMpCredential(token)) {
+    return "Cole o Access Token do Mercado Pago desta loja (TEST- ou APP_USR-).";
   }
   if (discord && !discord.startsWith("https://discord.com/api/webhooks/")) {
     return "O webhook do Discord deve começar com https://discord.com/api/webhooks/";
   }
-  if (!stripe && !discord) return "";
+  if (!token && !discord) return "";
 
   const patch = { updated_at: new Date().toISOString() };
-  if (stripe) patch.stripe_secret_key = stripe;
+  if (token) patch.mp_access_token = token;
   if (discord) patch.discord_webhook_url = discord;
 
   const { data: existing, error: lookupError } = await supabase
@@ -265,17 +266,25 @@ export async function saveShopSecrets(shopId, { stripeSecretKey, discordWebhookU
     .maybeSingle();
   if (lookupError) return explain(lookupError);
 
-  if (existing) {
-    const { error } = await supabase.from("shop_secrets").update(patch).eq("shop_id", shopId);
-    return error ? explain(error) : "";
+  async function write(target, extra = {}) {
+    if (existing) {
+      return supabase.from("shop_secrets").update({ ...target, ...extra }).eq("shop_id", shopId);
+    }
+    return supabase.from("shop_secrets").insert({
+      shop_id: shopId,
+      stripe_secret_key: "",
+      discord_webhook_url: discord,
+      updated_at: patch.updated_at,
+      ...target,
+      ...extra,
+    });
   }
 
-  const { error } = await supabase.from("shop_secrets").insert({
-    shop_id: shopId,
-    stripe_secret_key: stripe,
-    discord_webhook_url: discord,
-    updated_at: patch.updated_at,
-  });
+  let { error } = await write(patch);
+  if (error && /mp_access_token/i.test(error.message || "") && /column|schema cache/i.test(error.message || "")) {
+    const { mp_access_token: access, ...rest } = patch;
+    ({ error } = await write({ ...rest, stripe_secret_key: access || "" }));
+  }
   return error ? explain(error) : "";
 }
 
@@ -289,7 +298,8 @@ export async function saveShopRow(shopId, shop) {
     is_open: shop.open,
     open_label: shop.openLabel,
     closed_label: shop.closedLabel,
-    stripe_publishable_key: shop.stripePublishableKey || "",
+    mp_public_key: shop.mpPublicKey || "",
+    stripe_publishable_key: asMpKey(shop.mpPublicKey) || "",
     paid_title: shop.paidTitle || paidTitle,
     paid_message: shop.paidMessage || paidMessage,
     logo: shop.logo || "",
@@ -309,6 +319,10 @@ export async function saveShopRow(shopId, shop) {
   if (error && /min_order|delivery_max_km|delivery_fees|\bcoupons\b/i.test(error.message || "") && /column|schema cache/i.test(error.message || "")) {
     const { min_order: _min, delivery_max_km: _max, delivery_fees: _fees, coupons: _coupons, ...rest } = fields;
     ({ error } = await supabase.from("shops").update({ ...rest, slug: shop.slug }).eq("id", shopId));
+  }
+  if (error && /mp_public_key/i.test(error.message || "") && /column|schema cache/i.test(error.message || "")) {
+    const { mp_public_key: publicKey, ...rest } = fields;
+    ({ error } = await supabase.from("shops").update({ ...rest, stripe_publishable_key: publicKey || "", slug: shop.slug }).eq("id", shopId));
   }
   return error ? explain(error) : "";
 }

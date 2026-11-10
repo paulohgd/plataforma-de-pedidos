@@ -933,26 +933,15 @@ select {
   pointer-events: none;
 }
 
-.stripe-box {
+.pay-box {
   min-height: 280px;
   margin-top: 8px;
+  overflow-x: clip;
 }
 
-.gpay-box {
-  min-height: 48px;
-  margin-bottom: 8px;
-}
-
-.gpay-box.gpay-pending {
-  min-height: 1px;
-  margin-bottom: 0;
-  opacity: 0;
-  pointer-events: none;
-  overflow: hidden;
-}
-
-.stripe-box[hidden] {
+.pay-box[hidden] {
   display: none;
+  min-height: 0;
 }
 
 .pay-tabs {

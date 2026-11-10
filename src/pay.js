@@ -1,8 +1,8 @@
-export function checkoutSessionId(clientSecret) {
-  const text = String(clientSecret || "");
-  const at = text.indexOf("_secret_");
-  const id = at > 0 ? text.slice(0, at) : "";
-  return id.startsWith("cs_") ? id : "";
+const SESSION_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isCheckoutSessionId(value) {
+  const id = String(value || "").trim();
+  return SESSION_RE.test(id) || /^ORD/i.test(id);
 }
 
 function sessionKey(slug) {
@@ -10,19 +10,19 @@ function sessionKey(slug) {
 }
 
 export function rememberCheckoutSession(slug, sessionId) {
-  if (String(sessionId || "").startsWith("cs_")) {
-    sessionStorage.setItem(sessionKey(slug), sessionId);
+  if (isCheckoutSessionId(sessionId)) {
+    sessionStorage.setItem(sessionKey(slug), String(sessionId).trim());
   }
 }
 
 export function readCheckoutSessionId(slug) {
   const fromUrl = new URLSearchParams(window.location.search).get("session_id") || "";
-  if (fromUrl.startsWith("cs_")) {
+  if (isCheckoutSessionId(fromUrl)) {
     rememberCheckoutSession(slug, fromUrl);
-    return fromUrl;
+    return fromUrl.trim();
   }
   const stored = sessionStorage.getItem(sessionKey(slug)) || "";
-  return stored.startsWith("cs_") ? stored : "";
+  return isCheckoutSessionId(stored) ? stored : "";
 }
 
 export async function fetchCheckoutSession(sessionId) {

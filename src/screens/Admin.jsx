@@ -434,7 +434,7 @@ function AdminPanel() {
   const [orderDay, setOrderDay] = useState(0);
   const [orderPage, setOrderPage] = useState(1);
   const [confirmAccount, setConfirmAccount] = useState(false);
-  const [secretsSaved, setSecretsSaved] = useState({ stripe: false, discord: false });
+  const [secretsSaved, setSecretsSaved] = useState({ mercadoPago: false, discord: false });
   const logoFile = useRef(null);
   const [logoCropUrl, setLogoCropUrl] = useState("");
   const [shopForm, setShopForm] = useState({
@@ -446,8 +446,8 @@ function AdminPanel() {
     open: shop.open,
     openLabel: shop.openLabel,
     closedLabel: shop.closedLabel,
-    stripePublishableKey: shop.stripePublishableKey || "",
-    stripeSecretKey: "",
+    mpPublicKey: shop.mpPublicKey || "",
+    mpAccessToken: "",
     discordWebhookUrl: "",
     paidTitle: shop.paidTitle || paidTitle,
     paidMessage: shop.paidMessage || paidMessage,
@@ -472,8 +472,8 @@ function AdminPanel() {
       open: shop.open,
       openLabel: shop.openLabel,
       closedLabel: shop.closedLabel,
-      stripePublishableKey: shop.stripePublishableKey || "",
-      stripeSecretKey: "",
+      mpPublicKey: shop.mpPublicKey || "",
+      mpAccessToken: "",
       discordWebhookUrl: "",
       paidTitle: shop.paidTitle || paidTitle,
       paidMessage: shop.paidMessage || paidMessage,
@@ -490,7 +490,7 @@ function AdminPanel() {
     let cancel = false;
     fetchShopSecretStatus(shopId).then((result) => {
       if (cancel || result.error) return;
-      setSecretsSaved({ stripe: result.stripe, discord: result.discord });
+      setSecretsSaved({ mercadoPago: result.mercadoPago, discord: result.discord });
     });
     return () => {
       cancel = true;
@@ -557,9 +557,9 @@ function AdminPanel() {
       return;
     }
     setError("");
-    setShopForm((current) => ({ ...current, stripeSecretKey: "", discordWebhookUrl: "" }));
+    setShopForm((current) => ({ ...current, mpAccessToken: "", discordWebhookUrl: "" }));
     setSecretsSaved((current) => ({
-      stripe: current.stripe || Boolean(shopForm.stripeSecretKey.trim()),
+      mercadoPago: current.mercadoPago || Boolean(shopForm.mpAccessToken.trim()),
       discord: current.discord || Boolean(shopForm.discordWebhookUrl.trim()),
     }));
     notify("Dados da loja salvos.");
@@ -1075,28 +1075,29 @@ function AdminPanel() {
             </button>
           ) : null}
           <h3 className="admin-subtitle">Pagamento</h3>
-          <p className="hint">Cole as chaves da conta Stripe desta loja. A chave secreta não aparece de novo depois de salvar.</p>
+          <p className="hint">Cole as chaves da conta Mercado Pago desta loja, no aplicativo de Checkout Transparente. O Access Token não aparece de novo depois de salvar.</p>
           <label>
-            Chave publicável
+            Chave pública
             <input
               autoComplete="off"
               spellCheck="false"
-              placeholder="pk_..."
-              value={shopForm.stripePublishableKey}
-              onChange={(event) => setShopForm({ ...shopForm, stripePublishableKey: event.target.value })}
+              placeholder="APP_USR-... ou TEST-..."
+              value={shopForm.mpPublicKey}
+              onChange={(event) => setShopForm({ ...shopForm, mpPublicKey: event.target.value })}
             />
           </label>
           <label>
-            Chave secreta
+            Access Token
             <input
               type="password"
               autoComplete="new-password"
               spellCheck="false"
-              placeholder={secretsSaved.stripe ? "Salva. Cole outra só se for trocar." : "sk_ ou pk_..."}
-              value={shopForm.stripeSecretKey}
-              onChange={(event) => setShopForm({ ...shopForm, stripeSecretKey: event.target.value })}
+              placeholder={secretsSaved.mercadoPago ? "Salvo. Cole outro só se for trocar." : "APP_USR-... ou TEST-..."}
+              value={shopForm.mpAccessToken}
+              onChange={(event) => setShopForm({ ...shopForm, mpAccessToken: event.target.value })}
             />
           </label>
+          <p className="hint">Em Integrações → Webhooks, cadastre o evento Order (Mercado Pago) em https://app.pediaqui.dev.br/api/mp-webhook. Para Pix, a conta vendedora precisa ter chave Pix.</p>
           <label>
             Webhook do Discord
             <input

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { loadStripe } from "@stripe/stripe-js";
+import { loadMercadoPago } from "@mercadopago/sdk-js";
 import { useCatalog } from "../catalog";
 import { cepDigits, composeAddress, formatCep, lookupCep } from "../cep";
 import { formatPhone, money, phoneDigits, validPhone } from "../format";
@@ -7,9 +7,16 @@ import { cleanCouponCode, couponDiscount, findCoupon } from "../coupons";
 import { cleanMinOrder, deliveryFeeLabel, deliveryRulesHint } from "../freight";
 import { useCart } from "../cart";
 import { formatOption } from "../order";
-import { checkoutSessionId, fetchCheckoutSession, rememberCheckoutSession } from "../pay";
+import { fetchCheckoutSession, rememberCheckoutSession } from "../pay";
 import { useUI } from "../router";
 import { PageHead } from "../ui";
+
+let mpSdkReady;
+
+function ensureMpSdk() {
+  if (!mpSdkReady) mpSdkReady = loadMercadoPago();
+  return mpSdkReady;
+}
 
 function formatCountdown(ms) {
   const total = Math.max(0, Math.ceil(ms / 1000));
@@ -28,24 +35,20 @@ export default function Checkout() {
   const [confirming, setConfirming] = useState(false);
   const [method, setMethod] = useState("pix");
   const [cardKind, setCardKind] = useState("credit");
-  const [wallet, setWallet] = useState(false);
   const [pixCopy, setPixCopy] = useState("");
   const [pixExpiresAt, setPixExpiresAt] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const [copied, setCopied] = useState(false);
   const [sessionId, setSessionId] = useState("");
-  const [clientSecret, setClientSecret] = useState("");
-  const [checkoutReady, setCheckoutReady] = useState(false);
+  const [payerEmail, setPayerEmail] = useState("");
+  const [publicKey, setPublicKey] = useState("");
+  const [cardReady, setCardReady] = useState(false);
   const [completing, setCompleting] = useState(false);
   const [delivery, setDelivery] = useState(null);
   const [quoting, setQuoting] = useState(false);
   const [cepError, setCepError] = useState("");
   const [couponInput, setCouponInput] = useState("");
-  const box = useRef(null);
-  const walletBox = useRef(null);
-  const checkoutRef = useRef(null);
-  const paymentRef = useRef(null);
-  const walletRef = useRef(null);
+  const brickRef = useRef(null);
   const whatsappBox = useRef(null);
   const leaving = useRef(false);
   const waiting = !ready || (route.slug && shop.slug !== route.slug && !missing);
@@ -56,6 +59,7 @@ export default function Checkout() {
   const discount = couponDiscount(total, coupon);
   const payTotal = Number((total - discount + deliveryFee).toFixed(2));
   const deliveryCep = cepDigits(customer.cep);
+  const mpKey = publicKey || shop.mpPublicKey;
   const deliveryReady =
     customer.mode !== "entrega" ||
     Boolean(
@@ -76,142 +80,98 @@ export default function Checkout() {
     if (leaving.current) return;
     leaving.current = true;
     const slug = shop.slug || route.slug;
-    const paidId = id || checkoutSessionId(clientSecret);
-    rememberCheckoutSession(slug, paidId);
+    rememberCheckoutSession(slug, id);
     if (slug) localStorage.removeItem(`pedido-sacola:${slug}`);
     setCompleting(true);
-    openPaid(paidId);
-  }
-
-  async function confirmCheckout(extra = {}) {
-    const checkout = checkoutRef.current;
-    if (!checkout) throw new Error("Aguarde o pagamento carregar.");
-    const loaded = await checkout.loadActions();
-    if (loaded.type === "error") {
-      throw new Error(loaded.error?.message || "Não foi possível concluir o pagamento.");
-    }
-    const result = await loaded.actions.confirm({
-      redirect: "if_required",
-      ...extra,
-    });
-    if (result.type === "error") {
-      throw new Error(result.error?.message || "Não foi possível concluir o pagamento.");
-    }
-    if (result.session?.status?.type === "complete" && result.session.status.paymentStatus === "paid") {
-      goPaid(result.session.id || sessionId);
-    }
+    openPaid(id);
   }
 
   useEffect(
     () => () => {
-      paymentRef.current?.unmount?.();
-      walletRef.current?.unmount?.();
+      brickRef.current?.unmount?.();
+      brickRef.current = null;
     },
     [],
   );
 
   useEffect(() => {
-    if (!paying || !clientSecret || !walletBox.current) return undefined;
+    if (!paying || method !== "card" || !mpKey || !sessionId) return undefined;
     let canceled = false;
-    setCheckoutReady(false);
+    setCardReady(false);
     (async () => {
-      const stripe = await loadStripe(shop.stripePublishableKey);
-      if (!stripe || canceled) return;
-      walletRef.current?.unmount?.();
+      await ensureMpSdk();
+      if (canceled || !window.MercadoPago) return;
+      brickRef.current?.unmount?.();
+      brickRef.current = null;
       const dark = document.documentElement.classList.contains("dark");
-      let checkout = stripe.initCheckout({
-        clientSecret,
-        defaultValues: {
-          billingAddress: {
-            name: customer.name || undefined,
-            address: { country: "BR" },
-          },
+      const mp = new window.MercadoPago(mpKey, { locale: "pt-BR" });
+      const bricks = mp.bricks();
+      const controller = await bricks.create("cardPayment", "mp-card-brick", {
+        initialization: {
+          amount: payTotal,
+          payer: payerEmail ? { email: payerEmail } : undefined,
         },
-        elementsOptions: {
-          appearance: {
-            theme: dark ? "night" : "stripe",
-            variables: {
-              colorPrimary: dark ? "#f2f2f2" : "#1a1a1a",
-              colorBackground: dark ? "#1e1e1e" : "#ffffff",
-              colorText: dark ? "#f2f2f2" : "#2a2a2a",
-              colorTextSecondary: dark ? "#c4c4c4" : "#5a5a5a",
-              borderRadius: "8px",
-              fontSizeBase: "16px",
+        customization: {
+          paymentMethods: {
+            minInstallments: 1,
+            maxInstallments: 12,
+            types: {
+              excluded: cardKind === "debit" ? ["credit_card"] : ["debit_card"],
             },
           },
+          visual: {
+            hidePaymentButton: true,
+            style: { theme: dark ? "dark" : "default" },
+          },
+        },
+        callbacks: {
+          onReady: () => {
+            if (!canceled) setCardReady(true);
+          },
+          onError: (failure) => {
+            if (!canceled) setError(failure?.message || "Não foi possível abrir o cartão.");
+          },
+          onSubmit: (formData, additionalData) =>
+            fetch("/api/pay-card", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                sessionId,
+                token: formData.token,
+                paymentMethodId: formData.payment_method_id,
+                paymentTypeId: additionalData?.paymentTypeId || formData.payment_type_id || "credit_card",
+                installments: formData.installments || 1,
+                identification: formData.payer?.identification,
+              }),
+            })
+              .then(async (response) => {
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok || !payload.paid) {
+                  throw new Error(payload.error || "Não foi possível pagar com cartão.");
+                }
+                goPaid();
+              })
+              .catch((failure) => {
+                setError(failure.message || "Não foi possível pagar com cartão.");
+                throw failure;
+              }),
         },
       });
-      if (checkout && typeof checkout.then === "function") checkout = await checkout;
-      if (canceled) return;
-      checkoutRef.current = checkout;
-      let express = null;
-      try {
-        express = checkout.createExpressCheckoutElement({
-          buttonHeight: 48,
-          paymentMethods: { googlePay: "always", applePay: "never", link: "never" },
-        });
-      } catch {
-        express = null;
+      if (canceled) {
+        controller?.unmount?.();
+        return;
       }
-      if (express && walletBox.current) {
-        express.on("ready", (event) => {
-          setWallet(Boolean(event.availablePaymentMethods?.googlePay));
-        });
-        express.on("confirm", async (event) => {
-          try {
-            await confirmCheckout({ expressCheckoutConfirmEvent: event });
-          } catch (failure) {
-            setError(failure.message || "Não foi possível pagar com Google Pay.");
-          }
-        });
-        express.mount(walletBox.current);
-        walletRef.current = express;
-      }
-      setCheckoutReady(true);
+      brickRef.current = controller;
     })().catch((failure) => {
-      if (!canceled) setError(failure?.message || "Não foi possível abrir o pagamento.");
+      if (!canceled) setError(failure?.message || "Não foi possível abrir o cartão.");
     });
     return () => {
       canceled = true;
-      setCheckoutReady(false);
-      paymentRef.current?.unmount?.();
-      walletRef.current?.unmount?.();
-      paymentRef.current = null;
-      walletRef.current = null;
-      checkoutRef.current = null;
+      setCardReady(false);
+      brickRef.current?.unmount?.();
+      brickRef.current = null;
     };
-  }, [paying, clientSecret, shop.stripePublishableKey]);
-
-  useEffect(() => {
-    if (!paying || method !== "card" || !checkoutReady || !box.current) return;
-    const checkout = checkoutRef.current;
-    if (!checkout) return;
-    try {
-      const existing = typeof checkout.getPaymentElement === "function" ? checkout.getPaymentElement() : paymentRef.current;
-      if (existing) {
-        paymentRef.current = existing;
-        return;
-      }
-      const payment = checkout.createPaymentElement({
-        layout: "tabs",
-        wallets: { applePay: "never", googlePay: "never" },
-        fields: {
-          billingDetails: {
-            address: { country: "never" },
-          },
-        },
-      });
-      payment.mount(box.current);
-      paymentRef.current = payment;
-    } catch (failure) {
-      const existing = checkout.getPaymentElement?.();
-      if (existing) {
-        paymentRef.current = existing;
-        return;
-      }
-      setError(failure?.message || "Não foi possível abrir o cartão.");
-    }
-  }, [paying, method, checkoutReady]);
+  }, [paying, method, cardKind, mpKey, sessionId, payTotal, payerEmail]);
 
   useEffect(() => {
     if (customer.mode !== "entrega") {
@@ -385,8 +345,8 @@ export default function Checkout() {
         return;
       }
     }
-    if (!shop.stripePublishableKey) {
-      setError("Falta a chave publicável da Stripe nas configurações da loja.");
+    if (!shop.mpPublicKey) {
+      setError("Falta a chave pública do Mercado Pago nas configurações da loja.");
       return;
     }
     setPending(true);
@@ -419,14 +379,14 @@ export default function Checkout() {
         }),
       });
       const payload = await response.json();
-      if (!response.ok || !payload.clientSecret) {
+      if (!response.ok || !payload.sessionId) {
         setError(payload.error || "Não foi possível iniciar o pagamento.");
         return;
       }
-      const id = checkoutSessionId(payload.clientSecret);
-      setClientSecret(payload.clientSecret);
-      setSessionId(id);
-      rememberCheckoutSession(shop.slug, id);
+      setSessionId(payload.sessionId);
+      setPublicKey(payload.publicKey || shop.mpPublicKey);
+      setPayerEmail(payload.payerEmail || "");
+      rememberCheckoutSession(shop.slug, payload.sessionId);
       setPaying(true);
     } catch {
       setError("Não foi possível falar com o servidor de pagamento. Rode npm run pay.");
@@ -454,7 +414,8 @@ export default function Checkout() {
         if (payload.paid) goPaid();
         return;
       }
-      await confirmCheckout();
+      if (!brickRef.current) throw new Error("Aguarde o cartão carregar.");
+      await brickRef.current.submit();
     } catch (failure) {
       setError(failure.message || "Não foi possível concluir o pagamento.");
     } finally {
@@ -495,7 +456,6 @@ export default function Checkout() {
           <p className="hint">
             {customer.name} · {formatPhone(customer.whatsapp)} · {money(payTotal)}
           </p>
-          <div ref={walletBox} className={wallet ? "gpay-box" : "gpay-box gpay-pending"} />
           <div className="pay-tabs">
             <button
               type="button"
@@ -555,12 +515,13 @@ export default function Checkout() {
                   Débito
                 </button>
               </div>
+              {!cardReady ? <p className="hint">Carregando o cartão…</p> : null}
             </>
           ) : null}
-          <div ref={box} className="stripe-box" hidden={method !== "card"} />
+          <div id="mp-card-brick" className="pay-box" hidden={method !== "card"} />
           {error ? <p className="form-error">{error}</p> : null}
           {method === "pix" && pixAlive ? null : (
-            <button type="button" className="primary" disabled={confirming} onClick={confirmPay}>
+            <button type="button" className="primary" disabled={confirming || (method === "card" && !cardReady)} onClick={confirmPay}>
               <span>
                 {confirming ? "Gerando…" : method === "pix" && pixCopy && !pixAlive ? "Gerar novo código Pix" : "Pagar"}
               </span>
@@ -570,7 +531,7 @@ export default function Checkout() {
         </div>
       ) : (
         <form className="form" onSubmit={submit}>
-          <p className="hint">Informe seus dados para a loja entrar em contato. Depois você paga no cartão, Pix ou Google Pay.</p>
+          <p className="hint">Informe seus dados para a loja entrar em contato. Depois você paga no cartão ou Pix, sem sair do site.</p>
           <label>
             Seu nome
             <input
