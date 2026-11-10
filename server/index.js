@@ -580,7 +580,7 @@ async function payCard(request, response) {
   const token = String(payload.token || "").trim();
   const paymentMethodId = String(payload.paymentMethodId || "").trim().toLowerCase();
   const paymentType = String(payload.paymentTypeId || "credit_card").trim().toLowerCase();
-  const installments = Math.max(1, Number(payload.installments) || 1);
+  const installments = 1;
   if (!token || !paymentMethodId) {
     json(response, 400, { error: "Informe os dados do cartão." });
     return;

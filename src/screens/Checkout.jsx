@@ -114,7 +114,7 @@ export default function Checkout() {
         customization: {
           paymentMethods: {
             minInstallments: 1,
-            maxInstallments: 12,
+            maxInstallments: 1,
             types: {
               excluded: cardKind === "debit" ? ["credit_card"] : ["debit_card"],
             },
@@ -402,7 +402,7 @@ export default function Checkout() {
           token: formData.token,
           paymentMethodId: formData.payment_method_id,
           paymentTypeId: extra.paymentTypeId || formData.payment_type_id || "credit_card",
-          installments: formData.installments || 1,
+          installments: 1,
           identification: formData.payer?.identification,
         }),
       });

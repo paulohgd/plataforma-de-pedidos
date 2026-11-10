@@ -939,6 +939,12 @@ select {
   overflow-x: clip;
 }
 
+.pay-box [id*="installment" i],
+.pay-box [class*="installment" i],
+.pay-box [class*="Installment"] {
+  display: none !important;
+}
+
 .pay-box[hidden] {
   display: none;
   min-height: 0;
