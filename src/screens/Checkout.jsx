@@ -131,30 +131,6 @@ export default function Checkout() {
           onError: (failure) => {
             if (!canceled) setError(failure?.message || "Não foi possível abrir o cartão.");
           },
-          onSubmit: (formData, additionalData) =>
-            fetch("/api/pay-card", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                sessionId,
-                token: formData.token,
-                paymentMethodId: formData.payment_method_id,
-                paymentTypeId: additionalData?.paymentTypeId || formData.payment_type_id || "credit_card",
-                installments: formData.installments || 1,
-                identification: formData.payer?.identification,
-              }),
-            })
-              .then(async (response) => {
-                const payload = await response.json().catch(() => ({}));
-                if (!response.ok || !payload.paid) {
-                  throw new Error(payload.error || "Não foi possível pagar com cartão.");
-                }
-                goPaid();
-              })
-              .catch((failure) => {
-                setError(failure.message || "Não foi possível pagar com cartão.");
-                throw failure;
-              }),
         },
       });
       if (canceled) {
@@ -414,8 +390,27 @@ export default function Checkout() {
         if (payload.paid) goPaid();
         return;
       }
-      if (!brickRef.current) throw new Error("Aguarde o cartão carregar.");
-      await brickRef.current.submit();
+      const brick = brickRef.current;
+      if (!brick?.getFormData) throw new Error("Aguarde o cartão carregar.");
+      const formData = await brick.getFormData();
+      const extra = (await brick.getAdditionalData?.().catch(() => ({}))) || {};
+      const response = await fetch("/api/pay-card", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId,
+          token: formData.token,
+          paymentMethodId: formData.payment_method_id,
+          paymentTypeId: extra.paymentTypeId || formData.payment_type_id || "credit_card",
+          installments: formData.installments || 1,
+          identification: formData.payer?.identification,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.paid) {
+        throw new Error(payload.error || "Não foi possível pagar com cartão.");
+      }
+      goPaid();
     } catch (failure) {
       setError(failure.message || "Não foi possível concluir o pagamento.");
     } finally {
