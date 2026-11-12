@@ -49,6 +49,22 @@ function envMpAccessToken() {
   return asMpKey(process.env.MP_ACCESS_TOKEN);
 }
 
+async function loadShopForNotify(shopId) {
+  if (!supabase || !shopId) return null;
+  const full = await supabase
+    .from("shops")
+    .select("name, whatsapp, notify_whatsapp, notify_discord")
+    .eq("id", shopId)
+    .maybeSingle();
+  if (!full.error) return full.data;
+  if (/notify_whatsapp|notify_discord/i.test(full.error.message || "")) {
+    const basic = await supabase.from("shops").select("name, whatsapp").eq("id", shopId).maybeSingle();
+    return basic.data;
+  }
+  console.error("Loja do pedido:", full.error.message);
+  return null;
+}
+
 async function loadShopSecrets(shopId) {
   if (!supabase || !shopId) return { mpAccessToken: "", discordWebhook: "" };
   const { data, error } = await supabase.from("shop_secrets").select("*").eq("shop_id", shopId).maybeSingle();
@@ -259,19 +275,20 @@ async function fulfill(orderId, mpOrder) {
   if (error) throw new Error(error.message);
   if (data) {
     notifiedOrders.add(data.id);
-    const shop = (await supabase.from("shops").select("name, whatsapp").eq("id", data.shop_id).maybeSingle()).data;
+    const shop = await loadShopForNotify(data.shop_id);
     data.whatsapp_text = orderTextFromRow(shop, data, payment);
     await supabase.from("orders").update({ whatsapp_text: data.whatsapp_text }).eq("id", data.id);
     const secrets = await loadShopSecrets(data.shop_id);
-    const whatsapp = await sendShopWhatsApp(shop, data.whatsapp_text, shop?.whatsapp);
-    if (!whatsapp.sent) console.error("WhatsApp da loja:", whatsapp.error);
-    const discord =
-      whatsapp.sent || !secrets.discordWebhook
-        ? { sent: false, error: "" }
-        : await sendShopDiscord(shop, data.whatsapp_text, secrets.discordWebhook, data);
-    if (!discord.sent && secrets.discordWebhook && !whatsapp.sent) {
-      console.error("Discord da loja:", discord.error);
-    }
+    const notifyWhatsapp = shop?.notify_whatsapp !== false;
+    const notifyDiscord = shop?.notify_discord === true;
+    const whatsapp = notifyWhatsapp
+      ? await sendShopWhatsApp(shop, data.whatsapp_text, shop?.whatsapp)
+      : { sent: false, error: "" };
+    if (notifyWhatsapp && !whatsapp.sent) console.error("WhatsApp da loja:", whatsapp.error);
+    const discord = notifyDiscord
+      ? await sendShopDiscord(shop, data.whatsapp_text, secrets.discordWebhook, data)
+      : { sent: false, error: "" };
+    if (notifyDiscord && !discord.sent) console.error("Discord da loja:", discord.error);
     if (whatsapp.sent || discord.sent) {
       data.whatsapp_sent_at = new Date().toISOString();
       const stampedRow = await supabase

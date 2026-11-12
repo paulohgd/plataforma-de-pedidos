@@ -12,7 +12,7 @@ export function explain(error) {
   if (/slug/i.test(message) && /column|schema cache/i.test(message)) {
     return "Falta atualizar a base. Rode o schema.sql de novo no Supabase.";
   }
-  if (code === "PGRST205" || code === "42P01" || /schema cache/i.test(message) || /shop_secrets|paid_title|stripe_publishable|mp_public|mp_access|item_types|\bactive\b|\blogo\b|\bcep\b|min_order|delivery_max|delivery_fees|\bcoupons\b/i.test(message)) {
+  if (code === "PGRST205" || code === "42P01" || /schema cache/i.test(message) || /shop_secrets|paid_title|stripe_publishable|mp_public|mp_access|item_types|\bactive\b|\blogo\b|\bcep\b|min_order|delivery_max|delivery_fees|\bcoupons\b|notify_whatsapp|notify_discord/i.test(message)) {
     return "Falta atualizar a base. Rode o schema.sql de novo no Supabase.";
   }
   if (code === "23503") return "Essa categoria ainda tem produtos vinculados.";
@@ -70,6 +70,8 @@ function toStore(shop, categories, products, itemTypes) {
       deliveryMaxKm: cleanDeliveryMaxKm(shop.delivery_max_km),
       deliveryFees: cleanDeliveryFees(shop.delivery_fees?.length ? shop.delivery_fees : defaultDeliveryFees),
       coupons: cleanCoupons(shop.coupons),
+      notifyWhatsapp: shop.notify_whatsapp !== false,
+      notifyDiscord: shop.notify_discord === true,
     },
     categories: (categories || []).map((category) => ({ id: category.id, name: category.name })),
     products: (products || []).map((product) => ({
@@ -332,6 +334,8 @@ export async function saveShopRow(shopId, shop) {
     delivery_max_km: cleanDeliveryMaxKm(shop.deliveryMaxKm),
     delivery_fees: cleanDeliveryFees(shop.deliveryFees),
     coupons: cleanCoupons(shop.coupons),
+    notify_whatsapp: shop.notifyWhatsapp !== false,
+    notify_discord: shop.notifyDiscord === true,
   };
   let { error } = await supabase.from("shops").update({ ...fields, slug: shop.slug }).eq("id", shopId);
   if (error && missingSlugColumn(error)) {
@@ -348,6 +352,10 @@ export async function saveShopRow(shopId, shop) {
   if (error && /mp_public_key/i.test(error.message || "") && /column|schema cache/i.test(error.message || "")) {
     const { mp_public_key: publicKey, ...rest } = fields;
     ({ error } = await supabase.from("shops").update({ ...rest, stripe_publishable_key: publicKey || "", slug: shop.slug }).eq("id", shopId));
+  }
+  if (error && /notify_whatsapp|notify_discord/i.test(error.message || "") && /column|schema cache/i.test(error.message || "")) {
+    const { notify_whatsapp: _whatsapp, notify_discord: _discord, ...rest } = fields;
+    ({ error } = await supabase.from("shops").update({ ...rest, slug: shop.slug }).eq("id", shopId));
   }
   return error ? explain(error) : "";
 }

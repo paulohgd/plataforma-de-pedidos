@@ -42,6 +42,8 @@ alter table public.shops add column if not exists delivery_max_km numeric(6, 1) 
 alter table public.shops add column if not exists delivery_fees jsonb not null default '[{"upTo":3,"fee":0},{"upTo":7,"fee":8},{"upTo":10,"fee":12}]'::jsonb;
 alter table public.shops add column if not exists coupons jsonb not null default '[]'::jsonb;
 alter table public.shops add column if not exists mp_public_key text not null default '';
+alter table public.shops add column if not exists notify_whatsapp boolean not null default true;
+alter table public.shops add column if not exists notify_discord boolean not null default false;
 
 create table if not exists public.shop_secrets (
   shop_id uuid primary key references public.shops (id) on delete cascade,

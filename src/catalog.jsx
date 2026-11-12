@@ -57,6 +57,8 @@ function blankStore() {
       deliveryMaxKm: defaultDeliveryMaxKm,
       deliveryFees: defaultDeliveryFees.map((row) => ({ ...row })),
       coupons: [],
+      notifyWhatsapp: true,
+      notifyDiscord: false,
     },
     categories: [],
     products: [],
@@ -83,6 +85,8 @@ function cleanShop(shop) {
     deliveryMaxKm: cleanDeliveryMaxKm(source.deliveryMaxKm),
     deliveryFees: cleanDeliveryFees(source.deliveryFees?.length ? source.deliveryFees : defaultDeliveryFees),
     coupons: cleanCoupons(source.coupons),
+    notifyWhatsapp: source.notifyWhatsapp !== false,
+    notifyDiscord: source.notifyDiscord === true,
   };
 }
 

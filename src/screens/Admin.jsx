@@ -456,6 +456,8 @@ function AdminPanel() {
     deliveryMaxKm: shop.deliveryMaxKm ?? defaultDeliveryMaxKm,
     deliveryFees: cleanDeliveryFees(shop.deliveryFees),
     coupons: Array.isArray(shop.coupons) && shop.coupons.length ? shop.coupons : [],
+    notifyWhatsapp: shop.notifyWhatsapp !== false,
+    notifyDiscord: shop.notifyDiscord === true,
   });
 
   useEffect(() => {
@@ -482,6 +484,8 @@ function AdminPanel() {
       deliveryMaxKm: shop.deliveryMaxKm ?? defaultDeliveryMaxKm,
       deliveryFees: cleanDeliveryFees(shop.deliveryFees),
       coupons: Array.isArray(shop.coupons) && shop.coupons.length ? shop.coupons : [],
+      notifyWhatsapp: shop.notifyWhatsapp !== false,
+      notifyDiscord: shop.notifyDiscord === true,
     }));
   }, [shop]);
 
@@ -1123,7 +1127,39 @@ function AdminPanel() {
               onChange={(event) => setShopForm((current) => ({ ...current, discordWebhookUrl: event.target.value }))}
             />
           </label>
-          <p className="hint">Opcional. Se o WhatsApp da PediAqui falhar, o pedido pago ainda pode ir neste webhook.</p>
+          <p className="hint">Opcional. Cole o webhook se quiser o pedido pago no Discord. Só envia com a chave Discord ligada abaixo.</p>
+          <h3 className="admin-subtitle">Notificações</h3>
+          <p className="hint">Pedido pago pode ir nos dois canais, só em um, ou em nenhum. WhatsApp usa o número da loja. Discord usa o webhook.</p>
+          <div className="notify-list">
+            <div className="notify-switch">
+              <span>
+                <strong>WhatsApp</strong>
+                <span className="muted">Número cadastrado acima, pelo chip da PediAqui</span>
+              </span>
+              <button
+                type="button"
+                role="switch"
+                className={`switch${shopForm.notifyWhatsapp ? " on" : ""}`}
+                aria-checked={shopForm.notifyWhatsapp}
+                aria-label="Notificar no WhatsApp"
+                onClick={() => setShopForm((current) => ({ ...current, notifyWhatsapp: !current.notifyWhatsapp }))}
+              />
+            </div>
+            <div className="notify-switch">
+              <span>
+                <strong>Discord</strong>
+                <span className="muted">Webhook cadastrado acima</span>
+              </span>
+              <button
+                type="button"
+                role="switch"
+                className={`switch${shopForm.notifyDiscord ? " on" : ""}`}
+                aria-checked={shopForm.notifyDiscord}
+                aria-label="Notificar no Discord"
+                onClick={() => setShopForm((current) => ({ ...current, notifyDiscord: !current.notifyDiscord }))}
+              />
+            </div>
+          </div>
           <h3 className="admin-subtitle">Pedido pago</h3>
           <p className="hint">Essa é a mensagem que o cliente vê depois que o pagamento confirma. Use **texto** para negrito.</p>
           <label>
