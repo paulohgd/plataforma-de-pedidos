@@ -255,6 +255,27 @@ export async function saveShopSecrets(shopId, { mpAccessToken, discordWebhookUrl
   }
   if (!token && !discord) return "";
 
+  const { data: sessionData } = await supabase.auth.getSession();
+  const access = sessionData?.session?.access_token || "";
+  if (access) {
+    try {
+      const response = await fetch("/api/shop-secrets", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${access}`,
+        },
+        body: JSON.stringify({ shopId, mpAccessToken: token, discordWebhookUrl: discord }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) return payload.error || "Não foi possível gravar o Access Token.";
+      if (token && !payload.mercadoPago) return "O Access Token não ficou salvo.";
+      return "";
+    } catch (error) {
+      console.error("shop_secrets api:", error.message || error);
+    }
+  }
+
   const patch = { updated_at: new Date().toISOString() };
   if (token) patch.mp_access_token = token;
   if (discord) patch.discord_webhook_url = discord;
@@ -281,11 +302,15 @@ export async function saveShopSecrets(shopId, { mpAccessToken, discordWebhookUrl
   }
 
   let { error } = await write(patch);
-  if (error && /mp_access_token/i.test(error.message || "") && /column|schema cache/i.test(error.message || "")) {
+  if (error && token) {
     const { mp_access_token: access, ...rest } = patch;
-    ({ error } = await write({ ...rest, stripe_secret_key: access || "" }));
+    ({ error } = await write({ ...rest, stripe_secret_key: access || token }));
   }
-  return error ? explain(error) : "";
+  if (error) {
+    console.error("shop_secrets:", error.message || error);
+    return explain(error);
+  }
+  return "";
 }
 
 export async function saveShopRow(shopId, shop) {

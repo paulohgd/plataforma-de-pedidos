@@ -6,7 +6,7 @@ import { paidMessage, paidTitle } from "../src/config.js";
 import { cleanCouponCode, couponDiscount, findCoupon } from "../src/coupons.js";
 import { checkoutEmail, fullPhone, validPhone } from "../src/format.js";
 import { formatKm } from "../src/freight.js";
-import { asMpKey, isMpTestKey } from "../src/mp.js";
+import { asMpKey, isMpCredential, isMpTestKey } from "../src/mp.js";
 import { buildOrderText, whatsappOrderUrl } from "../src/order.js";
 import { quoteCart } from "./quote.js";
 import { sendShopDiscord } from "./discord.js";
@@ -52,7 +52,11 @@ function envMpAccessToken() {
 async function loadShopSecrets(shopId) {
   if (!supabase || !shopId) return { mpAccessToken: "", discordWebhook: "" };
   const { data, error } = await supabase.from("shop_secrets").select("*").eq("shop_id", shopId).maybeSingle();
-  if (error || !data) return { mpAccessToken: "", discordWebhook: "" };
+  if (error) {
+    console.error("Segredos da loja:", error.message);
+    return { mpAccessToken: "", discordWebhook: "" };
+  }
+  if (!data) return { mpAccessToken: "", discordWebhook: "" };
   return {
     mpAccessToken: envMpAccessToken() || asMpKey(data.mp_access_token) || asMpKey(data.stripe_secret_key),
     discordWebhook: String(data.discord_webhook_url || "").trim(),
@@ -64,8 +68,83 @@ async function accessTokenForShop(shopId) {
   return mpAccessToken || "";
 }
 
+async function ownerFromRequest(request) {
+  const jwt = String(request.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
+  if (!jwt || !supabase) return null;
+  const { data, error } = await supabase.auth.getUser(jwt);
+  if (error || !data?.user?.id) return null;
+  return data.user;
+}
+
+async function saveShopMpSecrets(request, response) {
+  if (!supabase) {
+    json(response, 503, { error: "Pagamento ainda não está configurado no servidor." });
+    return;
+  }
+  const user = await ownerFromRequest(request);
+  if (!user) {
+    json(response, 401, { error: "Sua sessão expirou. Entre de novo." });
+    return;
+  }
+  const payload = await readJson(request, 8192);
+  const shopId = String(payload.shopId || "").trim();
+  const token = String(payload.mpAccessToken || "").trim();
+  const discord = String(payload.discordWebhookUrl || "").trim();
+  if (token && !isMpCredential(token)) {
+    json(response, 400, { error: "Cole o Access Token do Mercado Pago desta loja (TEST- ou APP_USR-)." });
+    return;
+  }
+  if (discord && !discord.startsWith("https://discord.com/api/webhooks/")) {
+    json(response, 400, { error: "O webhook do Discord deve começar com https://discord.com/api/webhooks/" });
+    return;
+  }
+  const { data: shop } = await supabase.from("shops").select("id, owner_id").eq("id", shopId).maybeSingle();
+  if (!shop || shop.owner_id !== user.id) {
+    json(response, 403, { error: "Esta loja não pertence a esta conta." });
+    return;
+  }
+  if (!token && !discord) {
+    json(response, 200, { ok: true, mercadoPago: false });
+    return;
+  }
+  const { data: existing } = await supabase.from("shop_secrets").select("shop_id").eq("shop_id", shopId).maybeSingle();
+  const row = {
+    shop_id: shopId,
+    updated_at: new Date().toISOString(),
+  };
+  if (token) {
+    row.mp_access_token = token;
+    row.stripe_secret_key = token;
+  }
+  if (discord) row.discord_webhook_url = discord;
+  const written = existing
+    ? await supabase.from("shop_secrets").update(row).eq("shop_id", shopId).select("mp_access_token, stripe_secret_key").maybeSingle()
+    : await supabase.from("shop_secrets").insert({
+        stripe_secret_key: token || "",
+        discord_webhook_url: discord || "",
+        ...row,
+      }).select("mp_access_token, stripe_secret_key").maybeSingle();
+  if (written.error) {
+    console.error("shop_secrets:", written.error.message);
+    json(response, 500, { error: "Não foi possível gravar o Access Token." });
+    return;
+  }
+  json(response, 200, {
+    ok: true,
+    mercadoPago: Boolean(asMpKey(written.data?.mp_access_token) || asMpKey(written.data?.stripe_secret_key)),
+  });
+}
+
 function shopPublicKey(shop) {
   return envMpPublicKey() || shop?.mpPublicKey || "";
+}
+
+function missingMpConfig(accessToken, publicKey) {
+  if (!publicKey && !accessToken) {
+    return "Falta configurar as chaves do Mercado Pago nas configurações da loja.";
+  }
+  if (!publicKey) return "Falta a chave pública do Mercado Pago nas configurações da loja.";
+  return "Falta o Access Token do Mercado Pago nas configurações da loja. Cole de novo e salve.";
 }
 
 function isMpTestMode(publicKey, accessToken) {
@@ -333,7 +412,7 @@ async function createCheckout(request, response) {
   const accessToken = await accessTokenForShop(store.shopId);
   const publicKey = shopPublicKey(store.shop);
   if (!accessToken || !publicKey) {
-    json(response, 503, { error: "Falta configurar as chaves do Mercado Pago nas configurações da loja." });
+    json(response, 503, { error: missingMpConfig(accessToken, publicKey) });
     return;
   }
 
@@ -467,7 +546,7 @@ async function readSession(request, response) {
   }
   const token = await accessTokenForShop(existing.shop_id);
   if (!token) {
-    json(response, 503, { error: "Falta configurar as chaves do Mercado Pago nas configurações da loja." });
+    json(response, 503, { error: missingMpConfig(token, true) });
     return;
   }
   const order = await settleOrder(existing);
@@ -549,7 +628,7 @@ async function createPix(request, response) {
   if (existing.status === "canceled") await reopenPending(existing.id);
   const token = await accessTokenForShop(existing.shop_id);
   if (!token) {
-    json(response, 503, { error: "Falta configurar as chaves do Mercado Pago nas configurações da loja." });
+    json(response, 503, { error: missingMpConfig(token, true) });
     return;
   }
   try {
@@ -647,7 +726,7 @@ async function payCard(request, response) {
   }
   const accessToken = await accessTokenForShop(existing.shop_id);
   if (!accessToken) {
-    json(response, 503, { error: "Falta configurar as chaves do Mercado Pago nas configurações da loja." });
+    json(response, 503, { error: missingMpConfig(accessToken, true) });
     return;
   }
   try {
@@ -798,6 +877,10 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.method === "POST" && url.pathname === "/api/quote-delivery") {
       await quoteDeliveryRoute(request, response);
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/shop-secrets") {
+      await saveShopMpSecrets(request, response);
       return;
     }
     if (request.method === "GET" && (url.pathname === "/api/mp-webhook" || url.pathname === "/api/stripe-webhook")) {

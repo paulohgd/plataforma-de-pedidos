@@ -463,7 +463,7 @@ function AdminPanel() {
   }, [route.tab]);
 
   useEffect(() => {
-    setShopForm({
+    setShopForm((current) => ({
       name: shop.name,
       whatsapp: shop.whatsapp,
       address: shop.address,
@@ -473,8 +473,8 @@ function AdminPanel() {
       openLabel: shop.openLabel,
       closedLabel: shop.closedLabel,
       mpPublicKey: shop.mpPublicKey || "",
-      mpAccessToken: "",
-      discordWebhookUrl: "",
+      mpAccessToken: current.mpAccessToken,
+      discordWebhookUrl: current.discordWebhookUrl,
       paidTitle: shop.paidTitle || paidTitle,
       paidMessage: shop.paidMessage || paidMessage,
       logo: shop.logo || "",
@@ -482,7 +482,7 @@ function AdminPanel() {
       deliveryMaxKm: shop.deliveryMaxKm ?? defaultDeliveryMaxKm,
       deliveryFees: cleanDeliveryFees(shop.deliveryFees),
       coupons: Array.isArray(shop.coupons) && shop.coupons.length ? shop.coupons : [],
-    });
+    }));
   }, [shop]);
 
   useEffect(() => {
@@ -551,17 +551,28 @@ function AdminPanel() {
 
   async function submitShop(event) {
     event.preventDefault();
-    const message = await updateShop(shopForm);
+    const form = new FormData(event.currentTarget);
+    const payload = {
+      ...shopForm,
+      mpAccessToken: String(form.get("mpAccessToken") || shopForm.mpAccessToken || "").trim(),
+      discordWebhookUrl: String(form.get("discordWebhookUrl") || shopForm.discordWebhookUrl || "").trim(),
+    };
+    const message = await updateShop(payload);
     if (message) {
       showError(message);
       return;
     }
     setError("");
     setShopForm((current) => ({ ...current, mpAccessToken: "", discordWebhookUrl: "" }));
-    setSecretsSaved((current) => ({
-      mercadoPago: current.mercadoPago || Boolean(shopForm.mpAccessToken.trim()),
-      discord: current.discord || Boolean(shopForm.discordWebhookUrl.trim()),
-    }));
+    const status = shopId ? await fetchShopSecretStatus(shopId) : { mercadoPago: false, discord: false };
+    setSecretsSaved({
+      mercadoPago: Boolean(status.mercadoPago),
+      discord: Boolean(status.discord),
+    });
+    if (payload.mpAccessToken && !status.mercadoPago) {
+      showError("O Access Token não ficou salvo. Entre de novo na conta e tente outra vez.");
+      return;
+    }
     notify("Dados da loja salvos.");
   }
 
@@ -1075,10 +1086,11 @@ function AdminPanel() {
             </button>
           ) : null}
           <h3 className="admin-subtitle">Pagamento</h3>
-          <p className="hint">Cole as chaves da conta Mercado Pago desta loja, no aplicativo de Checkout Transparente. O Access Token não aparece de novo depois de salvar.</p>
+          <p className="hint">Cole as duas chaves da conta Mercado Pago desta loja (Checkout Transparente). A chave pública sozinha não cobra: o Access Token precisa estar salvo. Ele não aparece de novo depois de salvar.</p>
           <label>
             Chave pública
             <input
+              name="mpPublicKey"
               autoComplete="off"
               spellCheck="false"
               placeholder="APP_USR-... ou TEST-..."
@@ -1089,24 +1101,26 @@ function AdminPanel() {
           <label>
             Access Token
             <input
-              type="password"
-              autoComplete="new-password"
+              name="mpAccessToken"
+              type="text"
+              autoComplete="off"
               spellCheck="false"
-              placeholder={secretsSaved.mercadoPago ? "Salvo. Cole outro só se for trocar." : "APP_USR-... ou TEST-..."}
+              placeholder={secretsSaved.mercadoPago ? "Salvo. Cole outro só se for trocar." : "Obrigatório. APP_USR-... ou TEST-..."}
               value={shopForm.mpAccessToken}
-              onChange={(event) => setShopForm({ ...shopForm, mpAccessToken: event.target.value })}
+              onChange={(event) => setShopForm((current) => ({ ...current, mpAccessToken: event.target.value }))}
             />
           </label>
           <p className="hint">Em Integrações → Webhooks, cadastre o evento Order (Mercado Pago) em https://app.pediaqui.dev.br/api/mp-webhook. Para Pix, a conta vendedora precisa ter chave Pix.</p>
           <label>
             Webhook do Discord
             <input
-              type="password"
+              name="discordWebhookUrl"
+              type="text"
               autoComplete="off"
               spellCheck="false"
               placeholder={secretsSaved.discord ? "Salvo. Cole outro só se for trocar." : "https://discord.com/api/webhooks/..."}
               value={shopForm.discordWebhookUrl}
-              onChange={(event) => setShopForm({ ...shopForm, discordWebhookUrl: event.target.value })}
+              onChange={(event) => setShopForm((current) => ({ ...current, discordWebhookUrl: event.target.value }))}
             />
           </label>
           <p className="hint">Opcional. Se o WhatsApp da PediAqui falhar, o pedido pago ainda pode ir neste webhook.</p>

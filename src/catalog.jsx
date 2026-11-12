@@ -14,6 +14,7 @@ import {
   deleteProduct,
   explainAuth,
   fetchShops,
+  fetchShopSecretStatus,
   fetchStoreByOwner,
   fetchStoreBySlug,
   deleteItemType,
@@ -540,6 +541,14 @@ export function CatalogProvider({ children }) {
       const publishable = String(shop.mpPublicKey || "").trim();
       if (publishable && !isMpCredential(publishable)) {
         return "A chave pública do Mercado Pago deve começar com TEST- ou APP_USR-.";
+      }
+      const accessToken = String(shop.mpAccessToken || "").trim();
+      if (publishable && !accessToken) {
+        const status = await fetchShopSecretStatus(store.shopId);
+        if (status.error) return status.error;
+        if (!status.mercadoPago) {
+          return "Cole o Access Token do Mercado Pago e salve. A chave pública sozinha não cobra.";
+        }
       }
       let logo = String(shop.logo || "").trim();
       if (logo && !logo.startsWith("data:image/") && !/^https?:\/\//i.test(logo)) {
