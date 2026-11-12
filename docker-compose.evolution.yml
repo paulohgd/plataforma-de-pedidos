@@ -1,19 +1,66 @@
 services:
   evolution:
-    image: evoapicloud/evolution-api:v2.1.1
+    image: evoapicloud/evolution-api:v2.3.6
     container_name: pediaqui-evolution
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:8080"
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
     environment:
       AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY}
       SERVER_URL: http://127.0.0.1:8080
-      CONFIG_SESSION_PHONE_CLIENT: PediAqui
+      NODE_OPTIONS: --dns-result-order=ipv4first
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://evolution:${EVOLUTION_DB_PASSWORD}@evolution-postgres:5432/evolution
+      DATABASE_CONNECTION_CLIENT_NAME: pediaqui
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "false"
+      DATABASE_SAVE_MESSAGE_UPDATE: "false"
+      DATABASE_SAVE_DATA_CONTACTS: "false"
+      DATABASE_SAVE_DATA_CHATS: "false"
+      DATABASE_SAVE_DATA_HISTORIC: "false"
+      CACHE_REDIS_ENABLED: "false"
+      CACHE_LOCAL_ENABLED: "true"
+      CONFIG_SESSION_PHONE_CLIENT: Chrome
       CONFIG_SESSION_PHONE_NAME: Chrome
+      QRCODE_LIMIT: "30"
       DEL_INSTANCE: "false"
       WEBHOOK_GLOBAL_ENABLED: "false"
+    depends_on:
+      evolution-postgres:
+        condition: service_healthy
+      evolution-redis:
+        condition: service_started
     volumes:
       - evolution_instances:/evolution/instances
 
+  evolution-postgres:
+    image: postgres:16-alpine
+    container_name: pediaqui-evolution-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: evolution
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: ${EVOLUTION_DB_PASSWORD}
+    volumes:
+      - evolution_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evolution -d evolution"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  evolution-redis:
+    image: redis:7-alpine
+    container_name: pediaqui-evolution-redis
+    restart: unless-stopped
+    volumes:
+      - evolution_redis:/data
+
 volumes:
   evolution_instances:
+  evolution_postgres:
+  evolution_redis:
