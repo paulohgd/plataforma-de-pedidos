@@ -1,0 +1,19 @@
+services:
+  evolution:
+    image: evoapicloud/evolution-api:v2.1.1
+    container_name: pediaqui-evolution
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY}
+      SERVER_URL: http://127.0.0.1:8080
+      CONFIG_SESSION_PHONE_CLIENT: PediAqui
+      CONFIG_SESSION_PHONE_NAME: Chrome
+      DEL_INSTANCE: "false"
+      WEBHOOK_GLOBAL_ENABLED: "false"
+    volumes:
+      - evolution_instances:/evolution/instances
+
+volumes:
+  evolution_instances:

@@ -10,6 +10,7 @@ import { asMpKey, isMpTestKey } from "../src/mp.js";
 import { buildOrderText, whatsappOrderUrl } from "../src/order.js";
 import { quoteCart } from "./quote.js";
 import { sendShopDiscord } from "./discord.js";
+import { sendShopWhatsApp } from "./evolution.js";
 import { quoteDelivery } from "./freight.js";
 import {
   cancelMpOrder,
@@ -179,20 +180,26 @@ async function fulfill(orderId, mpOrder) {
   if (error) throw new Error(error.message);
   if (data) {
     notifiedOrders.add(data.id);
-    const shop = (await supabase.from("shops").select("name").eq("id", data.shop_id).maybeSingle()).data;
+    const shop = (await supabase.from("shops").select("name, whatsapp").eq("id", data.shop_id).maybeSingle()).data;
     data.whatsapp_text = orderTextFromRow(shop, data, payment);
     await supabase.from("orders").update({ whatsapp_text: data.whatsapp_text }).eq("id", data.id);
     const secrets = await loadShopSecrets(data.shop_id);
-    const sent = await sendShopDiscord(shop, data.whatsapp_text, secrets.discordWebhook, data);
-    if (sent.sent) {
+    const whatsapp = await sendShopWhatsApp(shop, data.whatsapp_text, shop?.whatsapp);
+    if (!whatsapp.sent) console.error("WhatsApp da loja:", whatsapp.error);
+    const discord =
+      whatsapp.sent || !secrets.discordWebhook
+        ? { sent: false, error: "" }
+        : await sendShopDiscord(shop, data.whatsapp_text, secrets.discordWebhook, data);
+    if (!discord.sent && secrets.discordWebhook && !whatsapp.sent) {
+      console.error("Discord da loja:", discord.error);
+    }
+    if (whatsapp.sent || discord.sent) {
       data.whatsapp_sent_at = new Date().toISOString();
       const stampedRow = await supabase
         .from("orders")
         .update({ whatsapp_sent_at: data.whatsapp_sent_at })
         .eq("id", data.id);
       if (stampedRow.error) console.error("whatsapp_sent_at:", stampedRow.error.message);
-    } else {
-      console.error("Discord da loja:", sent.error);
     }
     return data;
   }

@@ -885,7 +885,7 @@ function AdminPanel() {
               onChange={(event) => setShopForm({ ...shopForm, whatsapp: event.target.value })}
             />
           </label>
-          <p className="hint">DDI e DDD, só números. O pedido do cliente abre nesse WhatsApp.</p>
+          <p className="hint">DDI e DDD, só números. O pedido pago chega neste WhatsApp pela PediAqui. O cliente também abre conversa aqui.</p>
           <label>
             CEP da loja
             <input
@@ -1109,7 +1109,7 @@ function AdminPanel() {
               onChange={(event) => setShopForm({ ...shopForm, discordWebhookUrl: event.target.value })}
             />
           </label>
-          <p className="hint">O pedido pago é enviado neste webhook da loja.</p>
+          <p className="hint">Opcional. Se o WhatsApp da PediAqui falhar, o pedido pago ainda pode ir neste webhook.</p>
           <h3 className="admin-subtitle">Pedido pago</h3>
           <p className="hint">Essa é a mensagem que o cliente vê depois que o pagamento confirma. Use **texto** para negrito.</p>
           <label>
