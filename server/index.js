@@ -29,6 +29,7 @@ import {
   unwrapMpOrder,
   payerFromOrder,
   paymentKindFromOrder,
+  mpPixExpiresAt,
   pixFromOrder,
   waitForMpOrder,
 } from "./mercadopago.js";
@@ -377,7 +378,17 @@ async function settleOrder(existing) {
     }
   }
   if (!mpOrder) return existing;
+  mpOrder = await closePixAfterOffer(token, mpOrder);
   return applyMpOrder(existing, mpOrder);
+}
+
+async function closePixAfterOffer(token, mpOrder) {
+  if (!token || !mpOrder || mpOrderPaid(mpOrder) || mpOrderClosed(mpOrder)) return mpOrder;
+  if (paymentKindFromOrder(mpOrder) !== "pix") return mpOrder;
+  const expiresAt = mpPixExpiresAt(mpOrder);
+  if (!expiresAt || expiresAt > Date.now()) return mpOrder;
+  await dropMpOrder(token, mpOrder.id);
+  return (await getMpOrder(token, mpOrder.id).catch(() => null)) || mpOrder;
 }
 
 async function loadOrderBySession(sessionId) {
@@ -767,7 +778,8 @@ async function createPix(request, response) {
     if (isMpTestMode(publicKey, token)) payer.first_name = "APRO";
     let created = await createMpOrder(
       token,
-      mpPaymentBody(existing, payer, { id: "pix", type: "bank_transfer", expiration_time: "PT5M" }, place),
+      // Menos de 30 minutos faz o Mercado Pago expirar o Pix na hora. A tela corta em 5.
+      mpPaymentBody(existing, payer, { id: "pix", type: "bank_transfer", expiration_time: "PT30M" }, place),
       { deviceId: String(payload.deviceId || "").trim() },
     );
     created = await waitForMpOrder(token, created, { wantPix: true });

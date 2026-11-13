@@ -137,15 +137,17 @@ export function paymentKindFromOrder(order) {
   return "card";
 }
 
+export function mpPixExpiresAt(order) {
+  const created = Date.parse(order?.created_date || order?.date_created || "") || 0;
+  return created ? created + PIX_MS : 0;
+}
+
 export function pixFromOrder(order) {
   if (mpOrderPaid(order)) return { paid: true, pixCopy: "", expiresAt: 0 };
   const payment = firstPayment(order) || {};
   const method = payment.payment_method || {};
   const copy = String(method.qr_code || "").trim();
-  const expiration = Date.parse(payment.date_of_expiration || "") || 0;
-  const created = Date.parse(order?.created_date || order?.date_created || "") || 0;
-  const expiresAt = expiration || (created ? created + PIX_MS : 0);
-  return { paid: false, pixCopy: copy, expiresAt };
+  return { paid: false, pixCopy: copy, expiresAt: mpPixExpiresAt(order) };
 }
 
 export function mpOrderHasLivePix(order) {
