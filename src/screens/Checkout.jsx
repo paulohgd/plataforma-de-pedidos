@@ -28,11 +28,18 @@ function stripePromiseFor(key) {
   return stripeCache.get(publishable);
 }
 
-function CardPayForm({ confirming, onError, onPaid, onPending, payerEmail = "", payerName = "" }) {
+function CardPayForm({ confirming, onError, onPaid, onPending, payerEmail = "", payerName = "", billingAddress = null }) {
   const stripe = useStripe();
   const elements = useElements();
   const billingName = String(payerName || "Cliente").trim().slice(0, 120) || "Cliente";
   const billingEmail = String(payerEmail || "").trim();
+  const address = {
+    country: "BR",
+    postal_code: String(billingAddress?.postal_code || "").replace(/\D/g, "").slice(0, 8) || "01001000",
+    state: String(billingAddress?.state || "SP").trim().slice(0, 2).toUpperCase() || "SP",
+    city: String(billingAddress?.city || "São Paulo").trim().slice(0, 100) || "São Paulo",
+    line1: String(billingAddress?.line1 || "Brasil").trim().slice(0, 120) || "Brasil",
+  };
 
   async function pay() {
     if (!stripe || !elements) throw new Error("Aguarde o cartão carregar.");
@@ -45,7 +52,7 @@ function CardPayForm({ confirming, onError, onPaid, onPending, payerEmail = "", 
           billing_details: {
             name: billingName,
             email: billingEmail || undefined,
-            address: { country: "BR" },
+            address,
           },
         },
       },
@@ -513,6 +520,12 @@ export default function Checkout() {
                     confirming={confirming}
                     payerEmail={payerEmail}
                     payerName={customer.name}
+                    billingAddress={{
+                      postal_code: deliveryCep.length === 8 ? deliveryCep : cepDigits(shop.cep),
+                      state: customer.uf || "",
+                      city: customer.city || "",
+                      line1: [customer.street, customer.number].filter(Boolean).join(", ") || customer.address || "",
+                    }}
                     onError={setError}
                     onPaid={() => goPaid()}
                     onPending={async () => {
