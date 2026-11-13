@@ -669,8 +669,7 @@ function orderPayerEmail(order, payload = {}) {
 
 function mpPaymentBody(existing, payer, payment, place) {
   const amount = orderAmount(existing);
-  const { expiration_time: expirationTime, issuer_id: issuerId, ...paymentMethod } = payment;
-  if (/^\d+$/.test(String(issuerId || ""))) paymentMethod.issuer_id = String(issuerId);
+  const { expiration_time: expirationTime, issuer_id: _issuerId, ...paymentMethod } = payment;
   const row = { amount, payment_method: paymentMethod };
   if (expirationTime) row.expiration_time = expirationTime;
   const pickup = existing.customer_mode !== "entrega";
@@ -839,7 +838,6 @@ async function payCard(request, response) {
           token,
           installments,
           statement_descriptor: "PEDIAQUI",
-          issuer_id: payload.issuerId || "",
         },
         place,
       ),
@@ -864,7 +862,7 @@ async function payCard(request, response) {
   } catch (error) {
     const failed = unwrapMpOrder(error.payload);
     const detail = firstPayment(failed)?.status_detail || failed?.status_detail || error.message;
-    console.error("Cartão:", error.message, detail);
+    console.error("Cartão:", error.message, detail, JSON.stringify(error.payload || {}).slice(0, 400));
     json(response, 400, {
       error: mpPublicError(detail, "Não foi possível processar o cartão agora. Tente de novo ou pague com Pix."),
     });

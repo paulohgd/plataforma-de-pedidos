@@ -461,7 +461,6 @@ export default function Checkout() {
           paymentTypeId: extra.paymentTypeId || formData.payment_type_id || "credit_card",
           installments: 1,
           identification: formData.payer?.identification,
-          issuerId: formData.issuer_id || extra.issuerId || "",
           email: formData.payer?.email || payerEmail,
           deviceId: extra.deviceId || extra.device_id || deviceId,
           place,
