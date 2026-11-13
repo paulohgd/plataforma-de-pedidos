@@ -4,7 +4,7 @@ import WebSocket from "ws";
 import { createClient } from "@supabase/supabase-js";
 import { paidMessage, paidTitle } from "../src/config.js";
 import { cleanCouponCode, couponDiscount, findCoupon } from "../src/coupons.js";
-import { checkoutEmail, fullPhone, payerEmail, validPhone } from "../src/format.js";
+import { checkoutEmail, fullPhone, validPhone } from "../src/format.js";
 import { formatKm } from "../src/freight.js";
 import { asMpKey, isMpCredential, isMpTestKey } from "../src/mp.js";
 import { buildOrderText, whatsappOrderUrl } from "../src/order.js";
@@ -409,7 +409,6 @@ async function createCheckout(request, response) {
   const slug = String(payload.slug || "").trim();
   const customer = payload.customer || {};
   const name = String(customer.name || "").trim();
-  const email = payerEmail(customer.email);
   const whatsapp = fullPhone(customer.whatsapp);
   const mode = customer.mode === "entrega" ? "entrega" : "retirada";
   const address = String(customer.address || "").trim();
@@ -533,7 +532,7 @@ async function createCheckout(request, response) {
     shop_id: store.shopId,
     status: "pending",
     customer_name: name.slice(0, 80),
-    customer_email: email,
+    customer_email: "",
     customer_place: place,
     customer_whatsapp: whatsapp,
     customer_mode: mode,
@@ -567,7 +566,7 @@ async function createCheckout(request, response) {
   json(response, 200, {
     sessionId: order.id,
     publicKey,
-    payerEmail: email || checkoutEmail(whatsapp, order.id),
+    payerEmail: checkoutEmail(whatsapp, order.id),
   });
 }
 
@@ -684,12 +683,8 @@ function customerPlace(order, payload = {}) {
   };
 }
 
-function orderPayerEmail(order, payload = {}) {
-  return (
-    payerEmail(payload.email) ||
-    payerEmail(order?.customer_email) ||
-    checkoutEmail(order?.customer_whatsapp, order?.id)
-  );
+function orderPayerEmail(order) {
+  return checkoutEmail(order?.customer_whatsapp, order?.id);
 }
 
 function mpPaymentBody(existing, payer, payment, place) {

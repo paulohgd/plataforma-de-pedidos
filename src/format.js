@@ -66,7 +66,7 @@ export function formatPhone(value) {
 export function checkoutEmail(phone, orderId = "") {
   const digits = String(phone || "").replace(/\D/g, "");
   const key = (digits.length >= 10 ? digits.slice(-11) : String(orderId || "").replace(/[^a-z0-9]/gi, "")).slice(0, 32);
-  return key ? `pedido.${key}@pediaqui.dev.br` : "";
+  return key ? `pedido.${key}@cliente.pediaqui.dev.br` : "";
 }
 
 export function validEmail(value) {

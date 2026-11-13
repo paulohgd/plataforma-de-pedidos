@@ -127,6 +127,10 @@ export default function Checkout() {
   );
 
   useEffect(() => {
+    if (customer.email) setCustomer({ email: "" });
+  }, [customer.email]);
+
+  useEffect(() => {
     if (!paying || method !== "card" || pixAlive || !mpKey || !sessionId) return undefined;
     let canceled = false;
     setCardReady(false);
@@ -141,7 +145,7 @@ export default function Checkout() {
       const controller = await bricks.create("cardPayment", "mp-card-brick", {
         initialization: {
           amount: payTotal,
-          payer: customer.email || payerEmail ? { email: customer.email || payerEmail } : undefined,
+          payer: payerEmail ? { email: payerEmail } : undefined,
         },
         customization: {
           paymentMethods: {
@@ -182,7 +186,7 @@ export default function Checkout() {
       brickRef.current?.unmount?.();
       brickRef.current = null;
     };
-  }, [paying, method, pixAlive, mpKey, sessionId, payTotal, payerEmail, customer.email]);
+  }, [paying, method, pixAlive, mpKey, sessionId, payTotal, payerEmail]);
 
   useEffect(() => {
     if (customer.mode !== "entrega") {
@@ -450,7 +454,6 @@ export default function Checkout() {
           body: JSON.stringify({
             sessionId,
             deviceId,
-            email: customer.email,
             place,
           }),
         });
@@ -492,7 +495,7 @@ export default function Checkout() {
           paymentTypeId: extra.paymentTypeId || formData.payment_type_id || "credit_card",
           installments: 1,
           identification: formData.payer?.identification,
-          email: formData.payer?.email || payerEmail,
+          email: payerEmail,
           deviceId: extra.deviceId || extra.device_id || deviceId,
           place,
         }),
