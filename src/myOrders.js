@@ -67,5 +67,8 @@ export async function refreshMyOrder(slug, id) {
   if (payload.total != null) patch.total = Number(payload.total) || 0;
   if (Array.isArray(payload.items)) patch.items = payload.items;
   if (payload.createdAt) patch.createdAt = payload.createdAt;
+  if (payload.parentOrderId) patch.parentOrderId = payload.parentOrderId;
+  patch.paymentDuplicate = Boolean(payload.paymentDuplicate);
+  if (payload.paymentDuplicateNote) patch.paymentDuplicateNote = payload.paymentDuplicateNote;
   return upsertMyOrder(slug, patch);
 }

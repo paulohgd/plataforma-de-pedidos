@@ -33,8 +33,11 @@ import {
   pixFromOrder,
   waitForMpOrder,
 } from "./mercadopago.js";
+import { canLockPaymentMethod, findDuplicatePaid, normalizePaymentMethod } from "./paymentRules.js";
 import { isShopPage, sendShopPage } from "./shopPage.js";
 import { publicError, readBody, readJson, securityHeaders, tooMany } from "./security.js";
+
+const chargingOrders = new Set();
 
 const port = Number(process.env.PORT) || 8787;
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
@@ -263,26 +266,85 @@ function mpOrderId(value) {
   return /^ORD/i.test(id) ? id : "";
 }
 
+async function lockPaymentMethod(order, method) {
+  const check = canLockPaymentMethod(order?.payment_method, method);
+  if (!check.ok) return { ok: false, error: check.error, order };
+  if (normalizePaymentMethod(order?.payment_method) === check.method) return { ok: true, order };
+  const patch = { payment_method: check.method };
+  const { data, error } = await supabase
+    .from("orders")
+    .update(patch)
+    .eq("id", order.id)
+    .select("*")
+    .maybeSingle();
+  if (error && /payment_method/i.test(error.message || "")) {
+    return { ok: true, order: { ...order, payment_method: check.method } };
+  }
+  if (error) return { ok: false, error: error.message, order };
+  return { ok: true, order: data || { ...order, payment_method: check.method } };
+}
+
+async function flagDuplicatePayments(paidOrder) {
+  if (!paidOrder?.id || paidOrder.status !== "paid") return;
+  const shopId = paidOrder.shop_id;
+  const parentId = String(paidOrder.parent_order_id || "").trim();
+  const { data: rows } = await supabase
+    .from("orders")
+    .select("id, status, parent_order_id, payment_method, payment_duplicate")
+    .eq("shop_id", shopId)
+    .or(
+      [
+        `id.eq.${paidOrder.id}`,
+        parentId ? `id.eq.${parentId}` : "",
+        `parent_order_id.eq.${paidOrder.id}`,
+        parentId ? `parent_order_id.eq.${parentId}` : "",
+      ]
+        .filter(Boolean)
+        .join(","),
+    );
+  const other = findDuplicatePaid(paidOrder, rows || []);
+  if (!other) return;
+  const note = `Pagamento duplicado: este pedido e o ${other.id.slice(0, 8)} foram pagos.`;
+  await supabase
+    .from("orders")
+    .update({ payment_duplicate: true, payment_duplicate_note: note })
+    .in("id", [paidOrder.id, other.id]);
+  console.error("Pagamento duplicado:", paidOrder.id, other.id);
+}
+
 async function fulfill(orderId, mpOrder) {
   if (!orderId || !mpOrderPaid(mpOrder)) return null;
   const paidAt = new Date().toISOString();
   const payment = paymentKindFromOrder(mpOrder);
   const paymentId = String(firstPaymentId(mpOrder) || "");
-  const { data, error } = await supabase
+  const patch = {
+    status: "paid",
+    paid_at: paidAt,
+    stripe_session_id: String(mpOrder.id || ""),
+    stripe_payment_intent: paymentId,
+    payment_method: payment,
+  };
+  let { data, error } = await supabase
     .from("orders")
-    .update({
-      status: "paid",
-      paid_at: paidAt,
-      stripe_session_id: String(mpOrder.id || ""),
-      stripe_payment_intent: paymentId,
-    })
+    .update(patch)
     .eq("id", orderId)
     .neq("status", "paid")
     .select("*")
     .maybeSingle();
+  if (error && /payment_method/i.test(error.message || "")) {
+    const { payment_method: _method, ...rest } = patch;
+    ({ data, error } = await supabase
+      .from("orders")
+      .update(rest)
+      .eq("id", orderId)
+      .neq("status", "paid")
+      .select("*")
+      .maybeSingle());
+  }
   if (error) throw new Error(error.message);
   if (data) {
     notifiedOrders.add(data.id);
+    await flagDuplicatePayments(data).catch((failure) => console.error("Duplicidade:", failure.message));
     const shop = await loadShopForNotify(data.shop_id);
     data.whatsapp_text = orderTextFromRow(shop, data, payment);
     await supabase.from("orders").update({ whatsapp_text: data.whatsapp_text }).eq("id", data.id);
@@ -539,6 +601,16 @@ async function createCheckout(request, response) {
     discount,
   });
 
+  const parentOrderId = String(payload.parentOrderId || "").trim();
+  let parent = null;
+  if (parentOrderId) {
+    parent = (await supabase.from("orders").select("id, shop_id, status").eq("id", parentOrderId).maybeSingle()).data;
+    if (!parent || parent.shop_id !== store.shopId) {
+      json(response, 400, { error: "Pedido de origem inválido." });
+      return;
+    }
+  }
+
   const orderRow = {
     shop_id: store.shopId,
     status: "pending",
@@ -554,6 +626,10 @@ async function createCheckout(request, response) {
     delivery_km: delivery ? delivery.km : null,
     delivery_fee: delivery ? delivery.fee : 0,
     whatsapp_text: text,
+    payment_method: "",
+    parent_order_id: parent?.id || null,
+    payment_duplicate: false,
+    payment_duplicate_note: "",
   };
 
   let { data: order, error: orderError } = await supabase.from("orders").insert(orderRow).select("*").single();
@@ -569,6 +645,16 @@ async function createCheckout(request, response) {
     const { customer_email: _email, customer_place: _place, ...rest } = orderRow;
     ({ data: order, error: orderError } = await supabase.from("orders").insert(rest).select("*").single());
   }
+  if (orderError && /payment_method|parent_order_id|payment_duplicate/i.test(orderError.message || "")) {
+    const {
+      payment_method: _method,
+      parent_order_id: _parent,
+      payment_duplicate: _dup,
+      payment_duplicate_note: _note,
+      ...rest
+    } = orderRow;
+    ({ data: order, error: orderError } = await supabase.from("orders").insert(rest).select("*").single());
+  }
   if (orderError) {
     json(response, 500, { error: "Não foi possível gravar o pedido." });
     return;
@@ -578,6 +664,7 @@ async function createCheckout(request, response) {
     sessionId: order.id,
     publicKey,
     payerEmail: checkoutEmail(whatsapp, order.id),
+    parentOrderId: order.parent_order_id || parent?.id || "",
   });
 }
 
@@ -623,7 +710,10 @@ async function readSession(request, response) {
     paid,
     canceled,
     pending: !paid && !canceled,
-    payment,
+    payment: order.payment_method || payment,
+    paymentDuplicate: Boolean(order.payment_duplicate),
+    paymentDuplicateNote: order.payment_duplicate_note || "",
+    parentOrderId: order.parent_order_id || "",
     pixCopy: pix.pixCopy || "",
     expiresAt: pix.expiresAt || 0,
     shopName: shop?.name || "",
@@ -732,7 +822,7 @@ async function createPix(request, response) {
     return;
   }
   const payload = await readJson(request, 4096);
-  const existing = await loadOrderBySession(payload.sessionId);
+  let existing = await loadOrderBySession(payload.sessionId);
   if (!existing) {
     json(response, 404, { error: "Pedido não encontrado." });
     return;
@@ -742,11 +832,22 @@ async function createPix(request, response) {
     return;
   }
   if (existing.status === "canceled") await reopenPending(existing.id);
+  const locked = await lockPaymentMethod(existing, "pix");
+  if (!locked.ok) {
+    json(response, 409, { error: locked.error });
+    return;
+  }
+  existing = locked.order;
   const token = await accessTokenForShop(existing.shop_id);
   if (!token) {
     json(response, 503, { error: missingMpConfig(token, true) });
     return;
   }
+  if (chargingOrders.has(existing.id)) {
+    json(response, 409, { error: "Este pedido já está sendo processado. Aguarde." });
+    return;
+  }
+  chargingOrders.add(existing.id);
   try {
     const currentId = mpOrderId(existing.stripe_session_id);
     if (currentId) {
@@ -766,11 +867,14 @@ async function createPix(request, response) {
           json(response, 200, pixFromOrder(previous));
           return;
         }
-        if (!mpOrderClosed(previous)) await dropMpOrder(token, currentId);
+        if (!mpOrderClosed(previous)) {
+          // Só cancela a Order deste mesmo pedido (ex.: Pix da oferta de 5 min). Pedidos relacionados ficam intactos.
+          await dropMpOrder(token, currentId);
+        }
       }
     }
     const place = customerPlace(existing, payload);
-    const payer = payerFromOrder(existing, orderPayerEmail(existing, payload), place);
+    const payer = payerFromOrder(existing, orderPayerEmail(existing), place);
     const shopKeys = (await supabase.from("shops").select("mp_public_key, stripe_publishable_key").eq("id", existing.shop_id).maybeSingle()).data;
     const publicKey = shopPublicKey({
       mpPublicKey: asMpKey(shopKeys?.mp_public_key) || asMpKey(shopKeys?.stripe_publishable_key),
@@ -794,10 +898,12 @@ async function createPix(request, response) {
       json(response, 500, { error: "Não foi possível gerar o Pix. Tente de novo em instantes." });
       return;
     }
-    json(response, 200, pix);
+    json(response, 200, { ...pix, payment: "pix" });
   } catch (error) {
     console.error("Pix:", error.message);
     json(response, 500, { error: mpPublicError(error, "Não foi possível gerar o Pix.") });
+  } finally {
+    chargingOrders.delete(existing.id);
   }
 }
 
@@ -817,7 +923,7 @@ async function payCard(request, response) {
     return;
   }
   const payload = await readJson(request, 8192);
-  const existing = await loadOrderBySession(payload.sessionId);
+  let existing = await loadOrderBySession(payload.sessionId);
   if (!existing) {
     json(response, 404, { error: "Pedido não encontrado." });
     return;
@@ -827,6 +933,15 @@ async function payCard(request, response) {
     return;
   }
   if (existing.status === "canceled") await reopenPending(existing.id);
+  const locked = await lockPaymentMethod(existing, "card");
+  if (!locked.ok) {
+    json(response, 409, {
+      error: locked.error,
+      needsNewCheckout: true,
+    });
+    return;
+  }
+  existing = locked.order;
   const token = String(payload.token || "").trim();
   const paymentMethodId = String(payload.paymentMethodId || "").trim().toLowerCase();
   const paymentType = String(payload.paymentTypeId || "credit_card").trim().toLowerCase();
@@ -840,6 +955,11 @@ async function payCard(request, response) {
     json(response, 503, { error: missingMpConfig(accessToken, true) });
     return;
   }
+  if (chargingOrders.has(existing.id)) {
+    json(response, 409, { error: "Este pedido já está sendo processado. Aguarde." });
+    return;
+  }
+  chargingOrders.add(existing.id);
   try {
     const currentId = mpOrderId(existing.stripe_session_id);
     if (currentId) {
@@ -857,9 +977,10 @@ async function payCard(request, response) {
         json(response, 200, { paid: false, pending: true });
         return;
       }
-      if (mpOrderHasLivePix(previous)) {
+      if (mpOrderHasLivePix(previous) || paymentKindFromOrder(previous) === "pix") {
         json(response, 409, {
-          error: "Este pedido já tem um Pix. Pague com o código ou espere expirar para usar cartão.",
+          error: "Este pedido já está no Pix. Para pagar com cartão, inicie um novo pedido.",
+          needsNewCheckout: true,
           ...livePixPayload(previous),
         });
         return;
@@ -875,7 +996,7 @@ async function payCard(request, response) {
         }
       : null;
     const place = customerPlace(existing, payload);
-    const payer = payerFromOrder(existing, orderPayerEmail(existing, payload), place);
+    const payer = payerFromOrder(existing, orderPayerEmail(existing), place);
     if (identification) payer.identification = identification;
     let created = await createMpOrder(
       accessToken,
@@ -923,6 +1044,8 @@ async function payCard(request, response) {
     json(response, 400, {
       error: mpPublicError(detail, "Não foi possível processar o cartão agora. Tente de novo ou pague com Pix."),
     });
+  } finally {
+    chargingOrders.delete(existing.id);
   }
 }
 

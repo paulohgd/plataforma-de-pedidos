@@ -2,13 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { useCatalog } from "../catalog";
 import { formatCountdown } from "../format";
 import { refreshMyOrder, upsertMyOrder } from "../myOrders";
-import { fetchCheckoutSession, rememberCheckoutSession } from "../pay";
+import { fetchCheckoutSession, rememberCheckoutSession, rememberParentOrder } from "../pay";
 import { useUI } from "../router";
 import { PageHead } from "../ui";
 
 export default function PixPay() {
   const { shop } = useCatalog();
-  const { route, openPaid, openOrders, goHome } = useUI();
+  const { route, openPaid, openOrders, goHome, openBag } = useUI();
   const sessionId = String(route.id || "").trim();
   const slug = shop.slug || route.slug || "";
   const [pixCopy, setPixCopy] = useState("");
@@ -111,6 +111,20 @@ export default function PixPay() {
               {error ? <p className="form-error">{error}</p> : null}
               <button type="button" className="primary" onClick={copyPix}>
                 {copied ? "Código copiado" : "Copiar código"}
+              </button>
+              <p className="hint">
+                Você já iniciou um pagamento via Pix. Para pagar com cartão, será necessário iniciar um novo pedido. O Pix
+                anterior continua válido até expirar.
+              </p>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => {
+                  rememberParentOrder(slug, sessionId);
+                  openBag();
+                }}
+              >
+                Iniciar novo pedido com cartão
               </button>
             </>
           ) : (

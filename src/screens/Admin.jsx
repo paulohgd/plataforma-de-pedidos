@@ -816,7 +816,11 @@ function AdminPanel() {
                 {order.customer_name}
                 {order.customer_whatsapp ? ` · ${formatPhone(order.customer_whatsapp)}` : ""}
                 {` · ${order.customer_mode === "entrega" ? "Entrega" : "Retirada"}`}
+                {order.payment_method === "pix" ? " · Pix" : order.payment_method === "card" ? " · Cartão" : ""}
               </p>
+              {order.payment_duplicate ? (
+                <p className="form-error">{order.payment_duplicate_note || "Possível pagamento duplicado em pedido relacionado."}</p>
+              ) : null}
               {order.customer_mode === "entrega" && order.customer_address ? <p className="muted">{order.customer_address}</p> : null}
               <p className="muted">
                 {(order.items || [])

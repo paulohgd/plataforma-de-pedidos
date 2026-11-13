@@ -44,8 +44,14 @@ function OrderCard({ order, now, onPay, onCopy, copiedId }) {
         </>
       ) : null}
       {status === "paid" ? <p className="my-order-status ok">Pedido confirmado</p> : null}
+      {order.paymentDuplicate ? (
+        <p className="my-order-status">Atenção: outro pedido relacionado também foi pago. A loja vai conferir.</p>
+      ) : null}
       {status === "expired" ? <p className="my-order-status">Pix expirado. Faça um novo pedido para pagar.</p> : null}
       {status === "canceled" ? <p className="my-order-status">Pedido cancelado</p> : null}
+      {pixAlive ? (
+        <p className="muted">Para pagar com cartão, inicie um novo pedido. Este Pix continua válido até expirar.</p>
+      ) : null}
       {items.length ? (
         <p className="muted">
           {items

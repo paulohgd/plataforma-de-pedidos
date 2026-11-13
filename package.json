@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "pay": "node server/index.js"
+    "pay": "node server/index.js",
+    "test": "node --test server/paymentRules.test.js"
   },
   "dependencies": {
     "@mercadopago/sdk-js": "^0.0.3",

@@ -8,7 +8,13 @@ import { cleanMinOrder, deliveryFeeLabel, deliveryRulesHint } from "../freight";
 import { useCart } from "../cart";
 import { formatOption } from "../order";
 import { upsertMyOrder } from "../myOrders";
-import { fetchCheckoutSession, rememberCheckoutSession } from "../pay";
+import {
+  clearParentOrder,
+  fetchCheckoutSession,
+  readParentOrderId,
+  rememberCheckoutSession,
+  rememberParentOrder,
+} from "../pay";
 import { useUI } from "../router";
 import { PageHead } from "../ui";
 
@@ -107,6 +113,7 @@ export default function Checkout() {
     leaving.current = true;
     const slug = shop.slug || route.slug;
     rememberCheckoutSession(slug, sessionId);
+    rememberParentOrder(slug, sessionId);
     rememberOrder({
       payment: "pix",
       pixCopy: copy,
@@ -116,6 +123,13 @@ export default function Checkout() {
     setCompleting(true);
     openPixPay(sessionId);
     clear();
+  }
+
+  function startNewCheckoutForCard() {
+    const slug = shop.slug || route.slug;
+    if (sessionId) rememberParentOrder(slug, sessionId);
+    setError("Você já iniciou um pagamento via Pix. Monte a sacola de novo e pague com cartão em um novo pedido.");
+    goHome();
   }
 
   useEffect(
@@ -379,11 +393,13 @@ export default function Checkout() {
     setPending(true);
     setError("");
     try {
+      const parentOrderId = readParentOrderId(shop.slug);
       const response = await fetch("/api/create-checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           slug: shop.slug,
+          parentOrderId,
           customer: {
             name,
             whatsapp,
@@ -420,6 +436,7 @@ export default function Checkout() {
       setPublicKey(payload.publicKey || shop.mpPublicKey);
       setPayerEmail(payload.payerEmail || "");
       rememberCheckoutSession(shop.slug, payload.sessionId);
+      clearParentOrder(shop.slug);
       setPaying(true);
     } catch {
       setError("Não foi possível falar com o servidor de pagamento. Rode npm run pay.");
@@ -444,7 +461,7 @@ export default function Checkout() {
       };
       if (method === "card" && pixAlive) {
         setMethod("pix");
-        throw new Error("Este pedido já tem um Pix. Pague com o código ou espere expirar para usar cartão.");
+        throw new Error("Você já iniciou um pagamento via Pix. Para pagar com cartão, inicie um novo pedido.");
       }
       if (method === "pix") {
         if (pixAlive) return;
@@ -575,29 +592,31 @@ export default function Checkout() {
           <p className="hint">
             {customer.name} · {formatPhone(customer.whatsapp)} · {money(payTotal)}
           </p>
-          <div className="pay-tabs">
-            <button
-              type="button"
-              className={method === "pix" ? "choice on" : "choice"}
-              onClick={() => {
-                setMethod("pix");
-                setError("");
-              }}
-            >
-              Pix
-            </button>
-            <button
-              type="button"
-              className={method === "card" ? "choice on" : "choice"}
-              onClick={() => {
-                setMethod("card");
-                setError("");
-              }}
-            >
-              Cartão
-            </button>
-          </div>
-          {method === "pix" ? (
+          {pixAlive ? null : (
+            <div className="pay-tabs">
+              <button
+                type="button"
+                className={method === "pix" ? "choice on" : "choice"}
+                onClick={() => {
+                  setMethod("pix");
+                  setError("");
+                }}
+              >
+                Pix
+              </button>
+              <button
+                type="button"
+                className={method === "card" ? "choice on" : "choice"}
+                onClick={() => {
+                  setMethod("card");
+                  setError("");
+                }}
+              >
+                Cartão
+              </button>
+            </div>
+          )}
+          {method === "pix" || pixAlive ? (
             pixAlive ? (
               <div className="pix-copy">
                 <p className="hint">Cole este código no app do banco. Não usamos QR Code.</p>
@@ -609,15 +628,16 @@ export default function Checkout() {
                   Código válido por {formatCountdown(pixMsLeft)}
                 </p>
                 <p className="hint">Aguardando o pagamento…</p>
+                <p className="hint">Você já iniciou um pagamento via Pix. Para pagar com cartão, será necessário iniciar um novo pedido.</p>
+                <button type="button" className="ghost" onClick={startNewCheckoutForCard}>
+                  Iniciar novo pedido com cartão
+                </button>
               </div>
             ) : pixCopy || pixExpiresAt ? (
-              <p className="hint">Este código Pix expirou. Gere um novo para pagar.</p>
+              <p className="hint">Este código Pix expirou. Faça um novo pedido para pagar com Pix ou cartão.</p>
             ) : (
-              <p className="hint">Ao gerar o Pix, o pedido vai para Pedidos e não dá para pagar no cartão.</p>
+              <p className="hint">Ao gerar o Pix, este pedido fica só no Pix. Cartão exige um novo pedido.</p>
             )
-          ) : null}
-          {method === "card" && pixAlive ? (
-            <p className="hint">Este pedido já tem um Pix. Pague com o código ou espere expirar para usar cartão.</p>
           ) : null}
           {method === "card" && !pixAlive && !cardReady ? <p className="hint">Carregando o cartão…</p> : null}
           <div id="mp-card-brick" className="pay-box" hidden={method !== "card" || pixAlive} />

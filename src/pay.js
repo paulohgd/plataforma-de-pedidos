@@ -9,10 +9,29 @@ function sessionKey(slug) {
   return `pedido-session:${slug || ""}`;
 }
 
+function parentKey(slug) {
+  return `pedido-origem:${slug || ""}`;
+}
+
 export function rememberCheckoutSession(slug, sessionId) {
   if (isCheckoutSessionId(sessionId)) {
     sessionStorage.setItem(sessionKey(slug), String(sessionId).trim());
   }
+}
+
+export function rememberParentOrder(slug, orderId) {
+  if (isCheckoutSessionId(orderId) && !/^ORD/i.test(String(orderId))) {
+    sessionStorage.setItem(parentKey(slug), String(orderId).trim());
+  }
+}
+
+export function readParentOrderId(slug) {
+  const stored = sessionStorage.getItem(parentKey(slug)) || "";
+  return isCheckoutSessionId(stored) && !/^ORD/i.test(stored) ? stored : "";
+}
+
+export function clearParentOrder(slug) {
+  sessionStorage.removeItem(parentKey(slug));
 }
 
 export function readCheckoutSessionId(slug) {
