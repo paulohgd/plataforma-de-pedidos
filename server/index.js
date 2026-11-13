@@ -19,12 +19,10 @@ import { sendShopDiscord } from "./discord.js";
 import { sendShopWhatsApp } from "./evolution.js";
 import { quoteDelivery } from "./freight.js";
 import {
-  amountToCents,
   cancelIntent,
   checkoutSessionPaid,
   constructWebhookEvent,
   createCardIntent,
-  createEmbeddedCheckout,
   createPixIntent,
   paymentKindFromIntent,
   pixFromIntent,
@@ -722,66 +720,12 @@ async function createCheckout(request, response) {
     return;
   }
 
-  const origin = String(payload.origin || request.headers.origin || "").replace(/\/$/, "");
-  const returnUrl = origin
-    ? `${origin}/loja/${encodeURIComponent(slug)}/pedido-pago?session_id={CHECKOUT_SESSION_ID}`
-    : undefined;
-  if (!returnUrl) {
-    await supabase.from("orders").update({ status: "canceled" }).eq("id", order.id);
-    json(response, 400, { error: "Origem do checkout inválida." });
-    return;
-  }
-
-  const stripeLines = [
-    ...quoted.lines.map((line) => ({
-      name: line.name,
-      qty: line.qty,
-      unit: line.unit,
-      total: line.total,
-      options: line.options,
-    })),
-  ];
-  if (delivery && delivery.fee > 0) {
-    stripeLines.push({
-      name: `Entrega (${formatKm(delivery.km)})`,
-      qty: 1,
-      unit: delivery.fee,
-      total: delivery.fee,
-      options: [],
-    });
-  }
-
-  try {
-    const session = await createEmbeddedCheckout(accessToken, {
-      orderId: order.id,
-      shopId: store.shopId,
-      slug,
-      returnUrl,
-      lines: stripeLines,
-      email: checkoutEmail(whatsapp, order.id),
-      discountCents: discount > 0 ? amountToCents(discount) : 0,
-      discountLabel: coupon ? `Cupom ${coupon.code}` : "Desconto",
-    });
-    await supabase
-      .from("orders")
-      .update({ stripe_session_id: session.id })
-      .eq("id", order.id);
-    json(response, 200, {
-      sessionId: order.id,
-      checkoutSessionId: session.id,
-      clientSecret: session.client_secret,
-      publishableKey: publicKey,
-      publicKey,
-      payerEmail: checkoutEmail(whatsapp, order.id),
-      parentOrderId: order.parent_order_id || parent?.id || "",
-    });
-  } catch (error) {
-    console.error("Checkout Stripe:", error.message);
-    await supabase.from("orders").update({ status: "canceled" }).eq("id", order.id);
-    json(response, 500, {
-      error: stripePublicError(error, "Não foi possível iniciar o pagamento."),
-    });
-  }
+  json(response, 200, {
+    sessionId: order.id,
+    publicKey,
+    payerEmail: checkoutEmail(whatsapp, order.id),
+    parentOrderId: order.parent_order_id || parent?.id || "",
+  });
 }
 
 async function shopCopy(shopId) {
@@ -990,11 +934,7 @@ async function payCard(request, response) {
     return;
   }
   existing = locked.order;
-  const cardEmail = payerEmail(payload.email);
-  if (!cardEmail) {
-    json(response, 400, { error: "Informe um e-mail válido para pagar com cartão." });
-    return;
-  }
+  const cardEmail = payerEmail(payload.email) || orderPayerEmail(existing);
   const secret = await secretForShop(existing.shop_id);
   if (!secret) {
     json(response, 503, { error: missingStripeConfig(secret, true) });
@@ -1035,6 +975,7 @@ async function payCard(request, response) {
           paid: false,
           clientSecret: previous.client_secret,
           paymentIntentId: previous.id,
+          payerEmail: cardEmail,
         });
         return;
       }
@@ -1046,7 +987,6 @@ async function payCard(request, response) {
       amount: existing.total,
       orderId: existing.id,
       email: cardEmail,
-      name: existing.customer_name,
     });
     await rememberIntent(existing.id, created);
     if (stripePaymentPaid(created)) {
@@ -1062,6 +1002,7 @@ async function payCard(request, response) {
       paid: false,
       clientSecret: created.client_secret,
       paymentIntentId: created.id,
+      payerEmail: cardEmail,
     });
   } catch (error) {
     console.error("Cartão:", error.message);

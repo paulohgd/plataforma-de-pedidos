@@ -1006,14 +1006,16 @@ select {
 }
 
 .pay-box,
-.stripe-box {
+.stripe-box,
+.stripe-card-box {
   min-height: 280px;
   margin-top: 8px;
   overflow-x: clip;
 }
 
-.stripe-box {
-  min-height: 420px;
+.stripe-card-box a[href*="stripe.com"],
+.stripe-card-box [class*="PoweredBy"] {
+  display: none !important;
 }
 
 .pay-box [id*="installment" i],
