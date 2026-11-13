@@ -75,7 +75,7 @@ export default function Bag() {
             </div>
             {minOrder > 0 ? <p className="hint">Pedido mínimo: {money(Math.max(0.5, minOrder))}</p> : null}
             <button type="button" className="primary" onClick={openCheckout} disabled={belowMin}>
-              <span>Finalizar pedido</span>
+              <span>Ir para o pagamento</span>
               <span>{money(total)}</span>
             </button>
           </div>

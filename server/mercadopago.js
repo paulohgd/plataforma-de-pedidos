@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 const API = "https://api.mercadopago.com";
-export const PIX_MS = 30 * 60 * 1000;
+export const PIX_MS = 5 * 60 * 1000;
 
 export function moneyAmount(value) {
   return Number(value || 0).toFixed(2);
@@ -142,10 +142,8 @@ export function pixFromOrder(order) {
   const payment = firstPayment(order) || {};
   const method = payment.payment_method || {};
   const copy = String(method.qr_code || "").trim();
-  const expiration =
-    Date.parse(payment.date_of_expiration || method.date_of_expiration || "") || 0;
   const created = Date.parse(order?.created_date || order?.date_created || "") || 0;
-  const expiresAt = expiration || (created ? created + PIX_MS : 0);
+  const expiresAt = created ? created + PIX_MS : 0;
   return { paid: false, pixCopy: copy, expiresAt };
 }
 

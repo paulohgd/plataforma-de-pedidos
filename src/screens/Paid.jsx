@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useCart } from "../cart";
 import { paidMessage, paidTitle } from "../config";
 import { PaidCopy } from "../PaidCopy";
+import { upsertMyOrder } from "../myOrders";
 import { fetchCheckoutSession, readCheckoutSessionId } from "../pay";
 import { useUI } from "../router";
 import { PageHead } from "../ui";
@@ -48,6 +49,7 @@ export default function Paid() {
               cleared.current = true;
               clear();
             }
+            upsertMyOrder(route.slug, { id: sessionId, status: "paid" });
             setState({
               status: "paid",
               error: "",

@@ -572,7 +572,7 @@ async function createCheckout(request, response) {
 }
 
 async function shopCopy(shopId) {
-  const withCopy = await supabase.from("shops").select("name, slug, paid_title, paid_message, whatsapp").eq("id", shopId).maybeSingle();
+  const withCopy = await supabase.from("shops").select("name, slug, logo, paid_title, paid_message, whatsapp").eq("id", shopId).maybeSingle();
   if (!withCopy.error) return withCopy.data;
   return (await supabase.from("shops").select("name, slug, whatsapp").eq("id", shopId).maybeSingle()).data;
 }
@@ -599,9 +599,28 @@ async function readSession(request, response) {
   const paid = order.status === "paid";
   const canceled = order.status === "canceled";
   const text = paid ? order.whatsapp_text || orderTextFromRow(shop, order) : "";
+  let payment = "";
+  let pix = { pixCopy: "", expiresAt: 0 };
+  const mpId = mpOrderId(order.stripe_session_id);
+  if (mpId) {
+    const mpOrder = await getMpOrder(token, mpId).catch(() => null);
+    if (mpOrder) {
+      payment = paymentKindFromOrder(mpOrder);
+      pix = pixFromOrder(mpOrder);
+    }
+  }
   json(response, 200, {
     paid,
     canceled,
+    pending: !paid && !canceled,
+    payment,
+    pixCopy: pix.pixCopy || "",
+    expiresAt: pix.expiresAt || 0,
+    shopName: shop?.name || "",
+    shopLogo: shop?.logo || "",
+    total: Number(order.total || 0),
+    items: Array.isArray(order.items) ? order.items : [],
+    createdAt: order.created_at,
     paidTitle: shop?.paid_title || paidTitle,
     paidMessage: shop?.paid_message || paidMessage,
     whatsappUrl: paid ? whatsappOrderUrl(shop, text) : "",
@@ -753,7 +772,7 @@ async function createPix(request, response) {
     if (isMpTestMode(publicKey, token)) payer.first_name = "APRO";
     let created = await createMpOrder(
       token,
-      mpPaymentBody(existing, payer, { id: "pix", type: "bank_transfer", expiration_time: "PT30M" }, place),
+      mpPaymentBody(existing, payer, { id: "pix", type: "bank_transfer", expiration_time: "PT5M" }, place),
       { deviceId: String(payload.deviceId || "").trim() },
     );
     created = await waitForMpOrder(token, created, { wantPix: true });
@@ -814,7 +833,6 @@ async function payCard(request, response) {
     json(response, 503, { error: missingMpConfig(accessToken, true) });
     return;
   }
-  let openPix = null;
   try {
     const currentId = mpOrderId(existing.stripe_session_id);
     if (currentId) {
@@ -833,8 +851,13 @@ async function payCard(request, response) {
         return;
       }
       if (mpOrderHasLivePix(previous)) {
-        openPix = previous;
-      } else if (previous && !mpOrderClosed(previous) && !mpOrderPaid(previous)) {
+        json(response, 409, {
+          error: "Este pedido já tem um Pix. Pague com o código ou espere expirar para usar cartão.",
+          ...livePixPayload(previous),
+        });
+        return;
+      }
+      if (previous && !mpOrderClosed(previous) && !mpOrderPaid(previous)) {
         await dropMpOrder(accessToken, currentId);
       }
     }
@@ -871,22 +894,20 @@ async function payCard(request, response) {
       return;
     }
     if (mpOrderPaid(created)) {
-      if (openPix?.id) await dropMpOrder(accessToken, openPix.id);
       await rememberMpOrder(existing.id, created);
       await fulfill(existing.id, created);
       json(response, 200, { paid: true });
       return;
     }
     if (mpOrderInReview(created)) {
-      if (!openPix) await rememberMpOrder(existing.id, created);
-      json(response, 200, { paid: false, pending: true, ...livePixPayload(openPix) });
+      await rememberMpOrder(existing.id, created);
+      json(response, 200, { paid: false, pending: true });
       return;
     }
     const detail = firstPayment(created)?.status_detail || created?.status_detail || created?.status || "";
     console.error("Cartão MP:", created?.status, detail);
     json(response, 400, {
       error: mpPublicError(detail, "O pagamento não foi aprovado. Confira os dados ou tente Pix."),
-      ...livePixPayload(openPix),
     });
   } catch (error) {
     const failed = unwrapMpOrder(error.payload);
@@ -894,7 +915,6 @@ async function payCard(request, response) {
     console.error("Cartão:", error.message, detail, JSON.stringify(error.payload || {}).slice(0, 400));
     json(response, 400, {
       error: mpPublicError(detail, "Não foi possível processar o cartão agora. Tente de novo ou pague com Pix."),
-      ...livePixPayload(openPix),
     });
   }
 }

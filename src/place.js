@@ -17,6 +17,9 @@ export function readRoute(path = window.location.pathname) {
     if (product) return { name: "product", slug, id: decodeURIComponent(product[1]), lineId: null };
     if (rest.startsWith("/sacola")) return { name: "bag", slug };
     if (rest.startsWith("/checkout")) return { name: "checkout", slug };
+    const pixPay = rest.match(/^\/pedidos\/([^/]+)/);
+    if (pixPay) return { name: "pix-pay", slug, id: decodeURIComponent(pixPay[1]) };
+    if (rest.startsWith("/pedidos")) return { name: "orders", slug };
     if (rest.startsWith("/pedido-pago")) return { name: "paid", slug };
     if (rest.startsWith("/busca")) return { name: "search", slug };
     return { name: "home", slug };
@@ -26,6 +29,9 @@ export function readRoute(path = window.location.pathname) {
   if (legacyProduct) return { name: "product", slug: null, id: decodeURIComponent(legacyProduct[1]), lineId: null };
   if (path.startsWith("/sacola")) return { name: "bag", slug: null };
   if (path.startsWith("/checkout")) return { name: "checkout", slug: null };
+  const legacyPix = path.match(/^\/pedidos\/([^/]+)/);
+  if (legacyPix) return { name: "pix-pay", slug: null, id: decodeURIComponent(legacyPix[1]) };
+  if (path.startsWith("/pedidos")) return { name: "orders", slug: null };
   if (path.startsWith("/pedido-pago")) return { name: "paid", slug: null };
   if (path.startsWith("/busca")) return { name: "search", slug: null };
   return { name: "stores", slug: null };
@@ -42,7 +48,7 @@ export function readPlace(path = window.location.pathname) {
 export function singleShopRedirect(pathname, slug) {
   if (!slug) return "";
   if (pathname === "/" || pathname === "") return `/loja/${encodeURIComponent(slug)}`;
-  if (/^\/(produto|sacola|checkout|pedido-pago|busca)(\/|$)/.test(pathname)) {
+  if (/^\/(produto|sacola|checkout|pedidos|pedido-pago|busca)(\/|$)/.test(pathname)) {
     return `/loja/${encodeURIComponent(slug)}${pathname}`;
   }
   return "";

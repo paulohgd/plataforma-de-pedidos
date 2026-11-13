@@ -88,3 +88,10 @@ export function groupHint(group) {
   if (min > 0) return `Escolha de ${min} a ${max} itens`;
   return `Escolha até ${max} ${word(max)}`;
 }
+
+export function formatCountdown(ms) {
+  const total = Math.max(0, Math.ceil(Number(ms || 0) / 1000));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}

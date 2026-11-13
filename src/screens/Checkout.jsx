@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { loadMercadoPago } from "@mercadopago/sdk-js";
 import { useCatalog } from "../catalog";
 import { cepDigits, composeAddress, formatCep, lookupCep } from "../cep";
-import { formatPhone, money, phoneDigits, validPhone } from "../format";
+import { formatCountdown, formatPhone, money, phoneDigits, validPhone } from "../format";
 import { cleanCouponCode, couponDiscount, findCoupon } from "../coupons";
 import { cleanMinOrder, deliveryFeeLabel, deliveryRulesHint } from "../freight";
 import { useCart } from "../cart";
 import { formatOption } from "../order";
+import { upsertMyOrder } from "../myOrders";
 import { fetchCheckoutSession, rememberCheckoutSession } from "../pay";
 import { useUI } from "../router";
 import { PageHead } from "../ui";
@@ -27,17 +28,10 @@ async function readDeviceId() {
   return "";
 }
 
-function formatCountdown(ms) {
-  const total = Math.max(0, Math.ceil(ms / 1000));
-  const minutes = Math.floor(total / 60);
-  const seconds = total % 60;
-  return `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
-
 export default function Checkout() {
   const { shop, ready, missing } = useCatalog();
-  const { lines, total, customer, setCustomer } = useCart();
-  const { goHome, route, openPaid } = useUI();
+  const { lines, total, customer, setCustomer, clear } = useCart();
+  const { goHome, route, openPaid, openPixPay } = useUI();
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const [paying, setPaying] = useState(false);
@@ -84,14 +78,44 @@ export default function Checkout() {
     setCustomer(patch);
   }
 
+  function rememberOrder(patch) {
+    const slug = shop.slug || route.slug;
+    upsertMyOrder(slug, {
+      id: sessionId,
+      shopName: shop.name,
+      shopLogo: shop.logo,
+      total: payTotal,
+      items: lines.map((line) => ({ name: line.product?.name || line.name, qty: line.qty, total: line.total })),
+      createdAt: new Date().toISOString(),
+      ...patch,
+    });
+  }
+
   function goPaid(id = sessionId) {
     if (leaving.current) return;
     leaving.current = true;
     const slug = shop.slug || route.slug;
     rememberCheckoutSession(slug, id);
+    rememberOrder({ id, status: "paid", payment: method === "card" ? "card" : "pix" });
     if (slug) localStorage.removeItem(`pedido-sacola:${slug}`);
     setCompleting(true);
     openPaid(id);
+  }
+
+  function goPix(copy, expiresAt) {
+    if (leaving.current) return;
+    leaving.current = true;
+    const slug = shop.slug || route.slug;
+    rememberCheckoutSession(slug, sessionId);
+    rememberOrder({
+      payment: "pix",
+      pixCopy: copy,
+      expiresAt: Number(expiresAt) || 0,
+      status: "pending",
+    });
+    setCompleting(true);
+    openPixPay(sessionId);
+    clear();
   }
 
   useEffect(
@@ -103,7 +127,7 @@ export default function Checkout() {
   );
 
   useEffect(() => {
-    if (!paying || method !== "card" || !mpKey || !sessionId) return undefined;
+    if (!paying || method !== "card" || pixAlive || !mpKey || !sessionId) return undefined;
     let canceled = false;
     setCardReady(false);
     (async () => {
@@ -158,7 +182,7 @@ export default function Checkout() {
       brickRef.current?.unmount?.();
       brickRef.current = null;
     };
-  }, [paying, method, mpKey, sessionId, payTotal, payerEmail, customer.email]);
+  }, [paying, method, pixAlive, mpKey, sessionId, payTotal, payerEmail, customer.email]);
 
   useEffect(() => {
     if (customer.mode !== "entrega") {
@@ -414,6 +438,10 @@ export default function Checkout() {
         uf: customer.uf,
         complement: customer.complement,
       };
+      if (method === "card" && pixAlive) {
+        setMethod("pix");
+        throw new Error("Este pedido já tem um Pix. Pague com o código ou espere expirar para usar cartão.");
+      }
       if (method === "pix") {
         if (pixAlive) return;
         const response = await fetch("/api/create-pix", {
@@ -439,8 +467,7 @@ export default function Checkout() {
         if (!payload.pixCopy) {
           throw new Error(payload.error || "Não foi possível gerar o Pix. Tente de novo.");
         }
-        if (payload.pixCopy) setPixCopy(payload.pixCopy);
-        if (payload.expiresAt) setPixExpiresAt(Number(payload.expiresAt));
+        goPix(payload.pixCopy, payload.expiresAt);
         return;
       }
       const brick = brickRef.current;
@@ -476,7 +503,10 @@ export default function Checkout() {
         if (payload.expiresAt) setPixExpiresAt(Number(payload.expiresAt));
       }
       if (!response.ok) {
-        if (payload.pixCopy) setMethod("pix");
+        if (payload.pixCopy) {
+          goPix(payload.pixCopy, payload.expiresAt);
+          return;
+        }
         throw new Error(payload.error || "Não foi possível pagar com cartão.");
       }
       if (payload.paid) {
@@ -580,16 +610,16 @@ export default function Checkout() {
             ) : pixCopy || pixExpiresAt ? (
               <p className="hint">Este código Pix expirou. Gere um novo para pagar.</p>
             ) : (
-              <p className="hint">Toque em Pagar para gerar o código Pix (copia e cola).</p>
+              <p className="hint">Ao gerar o Pix, o pedido vai para Pedidos e não dá para pagar no cartão.</p>
             )
           ) : null}
           {method === "card" && pixAlive ? (
-            <p className="hint">O Pix continua aberto. Se o cartão não passar, você ainda pode pagar com o código gerado.</p>
+            <p className="hint">Este pedido já tem um Pix. Pague com o código ou espere expirar para usar cartão.</p>
           ) : null}
-          {method === "card" && !cardReady ? <p className="hint">Carregando o cartão…</p> : null}
-          <div id="mp-card-brick" className="pay-box" hidden={method !== "card"} />
+          {method === "card" && !pixAlive && !cardReady ? <p className="hint">Carregando o cartão…</p> : null}
+          <div id="mp-card-brick" className="pay-box" hidden={method !== "card" || pixAlive} />
           {error ? <p className="form-error">{error}</p> : null}
-          {method === "pix" && pixAlive ? null : (
+          {pixAlive ? null : (
             <button type="button" className="primary" disabled={confirming || (method === "card" && !cardReady)} onClick={confirmPay}>
               <span>
                 {confirming ? "Gerando…" : method === "pix" && pixCopy && !pixAlive ? "Gerar novo código Pix" : "Pagar"}

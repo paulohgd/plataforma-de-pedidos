@@ -3,6 +3,7 @@ import { useCart } from "./cart";
 import { useCatalog } from "./catalog";
 import { money } from "./format";
 import { catalogImage } from "./images";
+import { pendingOrderCount } from "./myOrders";
 import { useUI } from "./router";
 
 export function IconHome({ filled }) {
@@ -24,6 +25,15 @@ export function IconBag() {
     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
       <path d="M7 8V7a5 5 0 0 1 10 0v1" />
       <path d="M5.5 8h13l-1 12h-11l-1-12Z" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function IconOrders({ filled }) {
+  return (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <path d="M7 3.8h10v16.4l-2.1-1.1-2.1 1.1-1.8-1.1-1.8 1.1-2.1-1.1-2.1 1.1V3.8Z" strokeLinejoin="round" />
+      <path d="M9.2 8.5h5.6M9.2 12h5.6" strokeLinecap="round" fill="none" />
     </svg>
   );
 }
@@ -135,8 +145,24 @@ export function ItemLink({ product }) {
 }
 
 export function BottomNav() {
-  const { route, goHome, openBag } = useUI();
+  const { route, goHome, openBag, openOrders } = useUI();
+  const { shop } = useCatalog();
   const { count } = useCart();
+  const [ongoing, setOngoing] = useState(() => pendingOrderCount(shop.slug));
+
+  useEffect(() => {
+    function refresh() {
+      setOngoing(pendingOrderCount(shop.slug));
+    }
+    refresh();
+    window.addEventListener("pedido-meus", refresh);
+    const timer = setInterval(refresh, 1000);
+    return () => {
+      window.removeEventListener("pedido-meus", refresh);
+      clearInterval(timer);
+    };
+  }, [shop.slug]);
+
   return (
     <nav className="nav" aria-label="Principal">
       <button type="button" className={route.name === "home" ? "on" : ""} onClick={goHome}>
@@ -146,6 +172,11 @@ export function BottomNav() {
       <button type="button" className={route.name === "bag" ? "on" : ""} onClick={openBag}>
         <IconBag />
         {count > 0 ? <span className="badge">{count}</span> : null}
+        Sacola
+      </button>
+      <button type="button" className={route.name === "orders" || route.name === "pix-pay" ? "on" : ""} onClick={openOrders}>
+        <IconOrders filled={route.name === "orders" || route.name === "pix-pay"} />
+        {ongoing > 0 ? <span className="badge">{ongoing}</span> : null}
         Pedidos
       </button>
     </nav>

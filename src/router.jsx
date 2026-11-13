@@ -72,9 +72,13 @@ export function UIProvider({ children }) {
         ? "Lojas | Pedido online"
         : route.name === "paid"
           ? "Pedido pago"
-          : area
-            ? "Área da loja"
-            : shopPageTitle(shop.name, { missing });
+          : route.name === "orders"
+            ? "Pedidos"
+            : route.name === "pix-pay"
+              ? "Pagamento"
+              : area
+                ? "Área da loja"
+                : shopPageTitle(shop.name, { missing });
     document.title = title;
     const description = missing
       ? "Loja não encontrada."
@@ -170,6 +174,19 @@ export function UIProvider({ children }) {
     openBag() {
       const slug = currentSlug();
       go({ name: "bag", slug }, shopPath(slug, "/sacola"));
+    },
+    openOrders() {
+      const slug = currentSlug();
+      go({ name: "orders", slug }, shopPath(slug, "/pedidos"));
+    },
+    openPixPay(sessionId = "") {
+      const slug = currentSlug();
+      const id = String(sessionId || "").trim();
+      if (!id) {
+        go({ name: "orders", slug }, shopPath(slug, "/pedidos"));
+        return;
+      }
+      go({ name: "pix-pay", slug, id }, shopPath(slug, `/pedidos/${encodeURIComponent(id)}`));
     },
     openCheckout() {
       const slug = currentSlug();
