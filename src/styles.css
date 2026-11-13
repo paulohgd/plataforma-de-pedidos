@@ -1013,6 +1013,10 @@ select {
   overflow-x: clip;
 }
 
+.stripe-card-box > .primary {
+  margin-top: 20px;
+}
+
 .stripe-card-box a[href*="stripe.com"],
 .stripe-card-box [class*="PoweredBy"] {
   display: none !important;
@@ -1915,8 +1919,22 @@ html.dark .form-error {
 
 .my-order-actions {
   display: flex;
+  align-items: stretch;
   gap: 8px;
   margin-top: 4px;
+}
+
+.my-order-actions .primary,
+.my-order-actions .ghost {
+  flex: 1;
+  width: auto;
+  height: 48px;
+  min-height: 48px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
 }
 
 .pix-pay {
