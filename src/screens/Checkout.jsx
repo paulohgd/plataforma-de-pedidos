@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { loadMercadoPago } from "@mercadopago/sdk-js";
 import { useCatalog } from "../catalog";
 import { cepDigits, composeAddress, formatCep, lookupCep } from "../cep";
-import { formatPhone, money, phoneDigits, validPhone } from "../format";
+import { formatPhone, money, phoneDigits, validEmail, validPhone } from "../format";
 import { cleanCouponCode, couponDiscount, findCoupon } from "../coupons";
 import { cleanMinOrder, deliveryFeeLabel, deliveryRulesHint } from "../freight";
 import { useCart } from "../cart";
@@ -16,6 +16,15 @@ let mpSdkReady;
 function ensureMpSdk() {
   if (!mpSdkReady) mpSdkReady = loadMercadoPago();
   return mpSdkReady;
+}
+
+async function readDeviceId() {
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    const id = String(window.MP_DEVICE_SESSION_ID || document.querySelector("#deviceId")?.value || "").trim();
+    if (id) return id;
+    await new Promise((resolve) => setTimeout(resolve, 120));
+  }
+  return "";
 }
 
 function formatCountdown(ms) {
@@ -108,7 +117,7 @@ export default function Checkout() {
       const controller = await bricks.create("cardPayment", "mp-card-brick", {
         initialization: {
           amount: payTotal,
-          payer: payerEmail ? { email: payerEmail } : undefined,
+          payer: customer.email || payerEmail ? { email: customer.email || payerEmail } : undefined,
         },
         customization: {
           paymentMethods: {
@@ -149,7 +158,7 @@ export default function Checkout() {
       brickRef.current?.unmount?.();
       brickRef.current = null;
     };
-  }, [paying, method, mpKey, sessionId, payTotal, payerEmail]);
+  }, [paying, method, mpKey, sessionId, payTotal, payerEmail, customer.email]);
 
   useEffect(() => {
     if (customer.mode !== "entrega") {
@@ -312,6 +321,10 @@ export default function Checkout() {
       setError("Informe seu nome.");
       return;
     }
+    if (!validEmail(customer.email)) {
+      setError("Informe um e-mail válido.");
+      return;
+    }
     if (!validPhone(whatsapp)) {
       setError("Informe um WhatsApp válido, com DDD.");
       return;
@@ -349,9 +362,16 @@ export default function Checkout() {
           slug: shop.slug,
           customer: {
             name,
+            email: String(customer.email || "").trim(),
             whatsapp,
             mode: customer.mode,
             cep: deliveryCep,
+            number: customer.number,
+            complement: customer.complement,
+            street: customer.street,
+            neighborhood: customer.neighborhood,
+            city: customer.city,
+            uf: customer.uf,
             address: composeAddress(customer),
             notes: customer.notes,
           },
@@ -389,12 +409,27 @@ export default function Checkout() {
     setConfirming(true);
     setError("");
     try {
+      const deviceId = await readDeviceId();
+      const place = {
+        cep: customer.cep,
+        street: customer.street,
+        number: customer.number,
+        neighborhood: customer.neighborhood,
+        city: customer.city,
+        uf: customer.uf,
+        complement: customer.complement,
+      };
       if (method === "pix") {
         if (pixAlive) return;
         const response = await fetch("/api/create-pix", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId }),
+          body: JSON.stringify({
+            sessionId,
+            deviceId,
+            email: customer.email,
+            place,
+          }),
         });
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || "Não foi possível gerar o Pix.");
@@ -431,7 +466,10 @@ export default function Checkout() {
           paymentTypeId: extra.paymentTypeId || formData.payment_type_id || "credit_card",
           installments: 1,
           identification: formData.payer?.identification,
-          deviceId: extra.deviceId || extra.device_id || window.MP_DEVICE_SESSION_ID || "",
+          issuerId: formData.issuer_id || extra.issuerId || "",
+          email: formData.payer?.email || customer.email,
+          deviceId: extra.deviceId || extra.device_id || deviceId,
+          place,
         }),
       });
       const payload = await response.json().catch(() => ({}));
@@ -469,6 +507,7 @@ export default function Checkout() {
   return (
     <div className="checkout-page">
       <PageHead title={paying ? "Pagamento" : "Seus dados"} />
+      <input id="deviceId" type="hidden" readOnly tabIndex={-1} aria-hidden="true" />
       {busy ? (
         <div className="pay-loading" role="status" aria-live="polite">
           <span className="pay-spinner" aria-hidden="true" />
@@ -566,6 +605,18 @@ export default function Checkout() {
               onChange={(event) => setCustomer({ name: event.target.value })}
             />
           </label>
+          <label>
+            E-mail
+            <input
+              type="email"
+              value={customer.email || ""}
+              autoComplete="email"
+              maxLength={120}
+              placeholder="voce@email.com"
+              onChange={(event) => setCustomer({ email: event.target.value })}
+            />
+          </label>
+          <p className="hint">O Mercado Pago usa este e-mail na análise do pagamento. Use um e-mail verdadeiro.</p>
           <label>
             WhatsApp
             <input

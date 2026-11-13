@@ -86,7 +86,49 @@ export function unwrapMpOrder(payload) {
 
 export function mpItemsFromOrder(order) {
   const amount = moneyAmount(order?.total);
-  return [{ title: "Pedido", quantity: 1, unit_price: amount }];
+  const fallback = [
+    {
+      title: "Pedido",
+      description: "Pedido",
+      category_id: "MLB1403",
+      type: "food",
+      quantity: 1,
+      unit_price: amount,
+    },
+  ];
+  const lines = (order?.items || []).filter((line) => Number(line.total) > 0 && String(line.name || "").trim());
+  if (!lines.length) return fallback;
+  const items = lines.map((line) => {
+    const quantity = Math.max(1, Number(line.qty) || 1);
+    const extras = (line.options || []).map((option) => option.name).filter(Boolean).join(", ");
+    return {
+      title: String(line.name).slice(0, 150),
+      description: String(extras || line.name).slice(0, 256),
+      category_id: "MLB1403",
+      type: "food",
+      quantity,
+      unit_price: moneyAmount(Number(line.total) / quantity),
+      external_code: String(line.productId || "").slice(0, 60),
+    };
+  });
+  const sum = items.reduce((acc, item) => acc + Number(item.unit_price) * item.quantity, 0);
+  if (Math.abs(Number(order.total) - sum) >= 0.01) return fallback;
+  return items;
+}
+
+export function mpAddress(place = {}) {
+  const zip = String(place.cep || "").replace(/\D/g, "").slice(0, 8);
+  const street = String(place.street || "").trim();
+  if (!zip && !street) return null;
+  const address = {};
+  if (zip) address.zip_code = zip;
+  if (street) address.street_name = street.slice(0, 255);
+  if (place.number) address.street_number = String(place.number).replace(/\D/g, "").slice(0, 10) || String(place.number).slice(0, 10);
+  if (place.city) address.city = String(place.city).slice(0, 80);
+  if (place.uf) address.state = String(place.uf).trim().slice(0, 2).toUpperCase();
+  if (place.neighborhood) address.neighborhood = String(place.neighborhood).slice(0, 80);
+  if (place.complement) address.complement = String(place.complement).slice(0, 80);
+  return address;
 }
 
 export async function waitForMpOrder(accessToken, order, { wantPix = false } = {}) {
@@ -248,7 +290,7 @@ export async function cancelMpOrder(accessToken, id) {
   }
 }
 
-export function payerFromOrder(order, email) {
+export function payerFromOrder(order, email, place = null) {
   const phone = mpPhone(order?.customer_whatsapp);
   const payer = { email: String(email || "").trim() };
   const name = String(order?.customer_name || "").trim();
@@ -256,5 +298,7 @@ export function payerFromOrder(order, email) {
   if (firstName) payer.first_name = firstName;
   if (rest.length) payer.last_name = rest.join(" ");
   if (phone) payer.phone = phone;
+  const address = mpAddress(place || order?.customer_place);
+  if (address) payer.address = address;
   return payer;
 }

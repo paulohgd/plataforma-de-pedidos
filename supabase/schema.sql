@@ -362,6 +362,8 @@ create table if not exists public.orders (
 
 alter table public.orders add column if not exists whatsapp_sent_at timestamptz;
 alter table public.orders add column if not exists customer_whatsapp text not null default '';
+alter table public.orders add column if not exists customer_email text not null default '';
+alter table public.orders add column if not exists customer_place jsonb not null default '{}'::jsonb;
 alter table public.orders add column if not exists delivery_km numeric(6, 1);
 alter table public.orders add column if not exists delivery_fee numeric(10, 2) not null default 0;
 

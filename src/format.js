@@ -68,6 +68,18 @@ export function checkoutEmail(orderId) {
   return id ? `pedido.${id}@cliente.pediaqui.dev.br` : "";
 }
 
+export function validEmail(value) {
+  const email = String(value || "").trim();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 120 && !/@cliente\.pediaqui\.dev\.br$/i.test(email);
+}
+
+export function payerEmail(value, fallback = "") {
+  const email = String(value || "").trim().toLowerCase();
+  if (validEmail(email)) return email.slice(0, 120);
+  const next = String(fallback || "").trim().toLowerCase();
+  return validEmail(next) ? next.slice(0, 120) : "";
+}
+
 export function groupHint(group) {
   const max = group.max;
   const min = group.min || 0;

@@ -4,7 +4,7 @@ import WebSocket from "ws";
 import { createClient } from "@supabase/supabase-js";
 import { paidMessage, paidTitle } from "../src/config.js";
 import { cleanCouponCode, couponDiscount, findCoupon } from "../src/coupons.js";
-import { checkoutEmail, fullPhone, validPhone } from "../src/format.js";
+import { checkoutEmail, fullPhone, payerEmail, validEmail, validPhone } from "../src/format.js";
 import { formatKm } from "../src/freight.js";
 import { asMpKey, isMpCredential, isMpTestKey } from "../src/mp.js";
 import { buildOrderText, whatsappOrderUrl } from "../src/order.js";
@@ -19,6 +19,7 @@ import {
   getMpOrder,
   searchMpOrderByRef,
   moneyAmount,
+  mpAddress,
   mpItemsFromOrder,
   mpOrderClosed,
   mpOrderInReview,
@@ -402,14 +403,28 @@ async function createCheckout(request, response) {
   const slug = String(payload.slug || "").trim();
   const customer = payload.customer || {};
   const name = String(customer.name || "").trim();
+  const email = payerEmail(customer.email);
   const whatsapp = fullPhone(customer.whatsapp);
   const mode = customer.mode === "entrega" ? "entrega" : "retirada";
   const address = String(customer.address || "").trim();
   const cep = String(customer.cep || "").replace(/\D/g, "").slice(0, 8);
   const notes = String(customer.notes || "").trim().slice(0, 200);
+  const place = {
+    cep,
+    street: String(customer.street || "").trim(),
+    number: String(customer.number || "").trim(),
+    neighborhood: String(customer.neighborhood || "").trim(),
+    city: String(customer.city || "").trim(),
+    uf: String(customer.uf || "").trim().toUpperCase(),
+    complement: String(customer.complement || "").trim(),
+  };
 
   if (name.length < 2) {
     json(response, 400, { error: "Informe seu nome." });
+    return;
+  }
+  if (!email || !validEmail(email)) {
+    json(response, 400, { error: "Informe um e-mail válido." });
     return;
   }
   if (!validPhone(whatsapp)) {
@@ -516,6 +531,8 @@ async function createCheckout(request, response) {
     shop_id: store.shopId,
     status: "pending",
     customer_name: name.slice(0, 80),
+    customer_email: email,
+    customer_place: place,
     customer_whatsapp: whatsapp,
     customer_mode: mode,
     customer_address: address.slice(0, 160),
@@ -536,6 +553,10 @@ async function createCheckout(request, response) {
     const { delivery_km: _km, delivery_fee: _fee, ...rest } = orderRow;
     ({ data: order, error: orderError } = await supabase.from("orders").insert(rest).select("*").single());
   }
+  if (orderError && /customer_email|customer_place/i.test(orderError.message || "")) {
+    const { customer_email: _email, customer_place: _place, ...rest } = orderRow;
+    ({ data: order, error: orderError } = await supabase.from("orders").insert(rest).select("*").single());
+  }
   if (orderError) {
     json(response, 500, { error: "Não foi possível gravar o pedido." });
     return;
@@ -544,7 +565,7 @@ async function createCheckout(request, response) {
   json(response, 200, {
     sessionId: order.id,
     publicKey,
-    payerEmail: checkoutEmail(order.id),
+    payerEmail: email,
   });
 }
 
@@ -628,24 +649,56 @@ function orderAmount(existing) {
   return moneyAmount(existing.total);
 }
 
-function mpPaymentBody(existing, payer, payment) {
+function customerPlace(order, payload = {}) {
+  const incoming = payload.place && typeof payload.place === "object" ? payload.place : {};
+  const saved = order?.customer_place && typeof order.customer_place === "object" ? order.customer_place : {};
+  return {
+    cep: String(incoming.cep || saved.cep || "").replace(/\D/g, "").slice(0, 8),
+    street: String(incoming.street || saved.street || "").trim(),
+    number: String(incoming.number || saved.number || "").trim(),
+    neighborhood: String(incoming.neighborhood || saved.neighborhood || "").trim(),
+    city: String(incoming.city || saved.city || "").trim(),
+    uf: String(incoming.uf || saved.uf || "").trim().toUpperCase(),
+    complement: String(incoming.complement || saved.complement || "").trim(),
+  };
+}
+
+function orderPayerEmail(order, payload = {}) {
+  return (
+    payerEmail(payload.email) ||
+    payerEmail(order?.customer_email) ||
+    checkoutEmail(order?.id)
+  );
+}
+
+function mpPaymentBody(existing, payer, payment, place) {
   const amount = orderAmount(existing);
-  const { expiration_time: expirationTime, ...paymentMethod } = payment;
+  const { expiration_time: expirationTime, issuer_id: issuerId, ...paymentMethod } = payment;
+  if (issuerId) paymentMethod.issuer_id = String(issuerId);
   const row = { amount, payment_method: paymentMethod };
   if (expirationTime) row.expiration_time = expirationTime;
-  return {
+  const pickup = existing.customer_mode !== "entrega";
+  const address = mpAddress(place);
+  const body = {
     type: "online",
     processing_mode: "automatic",
     total_amount: amount,
     external_reference: existing.id,
-    description: "Pedido",
+    description: String(existing.items?.[0]?.name || "Pedido").slice(0, 150),
     payer,
     items: mpItemsFromOrder(existing),
-    config: { location: { state_id: mpLocation() } },
+    config: { location: { state_id: mpLocation(place?.uf) } },
+    additional_info: {
+      "payer.authentication_type": "WEB",
+      "shipment.local_pickup": pickup,
+      "shipment.express": false,
+    },
     transactions: {
       payments: [row],
     },
   };
+  if (address && !pickup) body.shipment = { address };
+  return body;
 }
 
 async function createPix(request, response) {
@@ -692,7 +745,8 @@ async function createPix(request, response) {
         await cancelMpOrder(token, currentId).catch(() => {});
       }
     }
-    const payer = payerFromOrder(existing, checkoutEmail(existing.id));
+    const place = customerPlace(existing, payload);
+    const payer = payerFromOrder(existing, orderPayerEmail(existing, payload), place);
     const shopKeys = (await supabase.from("shops").select("mp_public_key, stripe_publishable_key").eq("id", existing.shop_id).maybeSingle()).data;
     const publicKey = shopPublicKey({
       mpPublicKey: asMpKey(shopKeys?.mp_public_key) || asMpKey(shopKeys?.stripe_publishable_key),
@@ -700,7 +754,8 @@ async function createPix(request, response) {
     if (isMpTestMode(publicKey, token)) payer.first_name = "APRO";
     let created = await createMpOrder(
       token,
-      mpPaymentBody(existing, payer, { id: "pix", type: "bank_transfer", expiration_time: "PT30M" }),
+      mpPaymentBody(existing, payer, { id: "pix", type: "bank_transfer", expiration_time: "PT30M" }, place),
+      { deviceId: String(payload.deviceId || "").trim() },
     );
     created = await waitForMpOrder(token, created, { wantPix: true });
     await rememberMpOrder(existing.id, created);
@@ -779,17 +834,24 @@ async function payCard(request, response) {
           number: String(payload.identification.number || "").replace(/\D/g, ""),
         }
       : null;
-    const payer = payerFromOrder(existing, checkoutEmail(existing.id));
+    const place = customerPlace(existing, payload);
+    const payer = payerFromOrder(existing, orderPayerEmail(existing, payload), place);
     if (identification) payer.identification = identification;
     let created = await createMpOrder(
       accessToken,
-      mpPaymentBody(existing, payer, {
-        id: paymentMethodId,
-        type: paymentType === "debit_card" ? "debit_card" : "credit_card",
-        token,
-        installments,
-        statement_descriptor: "PEDIAQUI",
-      }),
+      mpPaymentBody(
+        existing,
+        payer,
+        {
+          id: paymentMethodId,
+          type: paymentType === "debit_card" ? "debit_card" : "credit_card",
+          token,
+          installments,
+          statement_descriptor: "PEDIAQUI",
+          issuer_id: payload.issuerId || "",
+        },
+        place,
+      ),
       { deviceId: String(payload.deviceId || "").trim() },
     );
     created = await waitForMpOrder(accessToken, created);
