@@ -243,8 +243,8 @@ export function mpPublicError(error, fallback = "Não foi possível concluir o p
   if (/pix/i.test(message) && /key|chave|not.?found|não encontr/i.test(message)) {
     return "Esta loja ainda não tem Pix cadastrado no Mercado Pago.";
   }
-  if (/token/i.test(message) && /invalid|expired|used/i.test(message)) {
-    return "Não foi possível processar o cartão. Confira os dados.";
+  if (/invalid_card_token|token/i.test(message) && /invalid|expired|used/i.test(message)) {
+    return "O cartão precisa ser preenchido de novo. Atualize a página e tente pagar outra vez.";
   }
   if (/insufficient|high.?risk|rejected|refused|failed/i.test(message)) {
     return "O pagamento foi recusado. Confira os dados ou tente Pix.";

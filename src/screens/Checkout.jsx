@@ -173,7 +173,7 @@ export default function Checkout() {
         customization: {
           paymentMethods: {
             minInstallments: 1,
-            maxInstallments: 12,
+            maxInstallments: 1,
           },
           visual: {
             hidePaymentButton: true,

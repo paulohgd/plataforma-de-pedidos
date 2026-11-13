@@ -805,7 +805,7 @@ async function payerAdditionalInfo(existing) {
   return info;
 }
 
-function mpPaymentBody(existing, payer, payment, place, { with3ds = false, force3ds = false, additionalInfo = null } = {}) {
+function mpPaymentBody(existing, payer, payment, place, { with3ds = false, additionalInfo = null } = {}) {
   const amount = orderAmount(existing);
   const { expiration_time: expirationTime, issuer_id: _issuerId, ...paymentMethod } = payment;
   const row = { amount, payment_method: paymentMethod };
@@ -815,10 +815,10 @@ function mpPaymentBody(existing, payer, payment, place, { with3ds = false, force
   if (address && !payer.address) payer.address = address;
   const config = { location: { state_id: mpLocation(place?.uf) } };
   if (with3ds) {
-    // Crédito: força Challenge. Débito: só quando o risco pedir.
+    // validation=always invalida o token nesta conta; on_fraud_risk é o modo documentado.
     config.online = {
       transaction_security: {
-        validation: force3ds ? "always" : "on_fraud_risk",
+        validation: "on_fraud_risk",
         liability_shift: "required",
       },
     };
@@ -1054,36 +1054,23 @@ async function payCard(request, response) {
     const additionalInfo = await payerAdditionalInfo(existing);
     const cardType = paymentType === "debit_card" ? "debit_card" : "credit_card";
     const cardInstallments = Math.max(1, Math.min(12, Number(payload.installments) || installments || 1));
-    const paymentMethod = {
-      id: paymentMethodId,
-      type: cardType,
-      token,
-      installments: cardType === "debit_card" ? 1 : cardInstallments,
-      statement_descriptor: "PEDIAQUI",
-    };
-    async function createCardOrder(force3ds) {
-      return createMpOrder(
-        accessToken,
-        mpPaymentBody(existing, payer, paymentMethod, place, {
-          with3ds: true,
-          force3ds,
-          additionalInfo,
-        }),
-        { deviceId },
-      );
-    }
-    let created;
-    try {
-      created = await createCardOrder(cardType === "credit_card");
-    } catch (error) {
-      // Algumas contas ainda não aceitam validation=always; cai no modo recomendado.
-      if (cardType === "credit_card" && /transaction_security|validation|always|additionalProperties/i.test(error.message || "")) {
-        console.error("3DS always recusado, tentando on_fraud_risk:", error.message);
-        created = await createCardOrder(false);
-      } else {
-        throw error;
-      }
-    }
+    let created = await createMpOrder(
+      accessToken,
+      mpPaymentBody(
+        existing,
+        payer,
+        {
+          id: paymentMethodId,
+          type: cardType,
+          token,
+          installments: cardType === "debit_card" ? 1 : cardInstallments,
+          statement_descriptor: "PEDIAQUI",
+        },
+        place,
+        { with3ds: true, additionalInfo },
+      ),
+      { deviceId },
+    );
     created = await waitForMpOrder(accessToken, created);
     const latest = await loadOrderBySession(existing.id);
     if (latest?.status === "paid") {
