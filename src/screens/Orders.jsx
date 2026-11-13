@@ -1,19 +1,14 @@
 import { useEffect, useState } from "react";
 import { useCatalog } from "../catalog";
 import { formatCountdown, money } from "../format";
-import { myOrderStatus, readMyOrders, refreshMyOrder } from "../myOrders";
+import { myOrderStatus, orderExpiresAt, readMyOrders, refreshMyOrder } from "../myOrders";
 import { useUI } from "../router";
 import { BottomNav, PageHead, Thumb } from "../ui";
 
-function shortPix(code) {
-  const value = String(code || "").trim();
-  if (value.length <= 28) return value;
-  return `${value.slice(0, 22)}…`;
-}
-
 function OrderCard({ order, now, onPay, onCopy, copiedId, onNewOrder }) {
   const status = myOrderStatus(order, now);
-  const msLeft = Number(order.expiresAt || 0) - now;
+  const expiresAt = orderExpiresAt(order);
+  const msLeft = expiresAt ? expiresAt - now : 0;
   const pixAlive = status === "pending" && order.payment === "pix" && Boolean(order.pixCopy) && msLeft > 0;
   const items = Array.isArray(order.items) ? order.items.filter((item) => Number(item.qty) > 0) : [];
   return (
@@ -31,16 +26,18 @@ function OrderCard({ order, now, onPay, onCopy, copiedId, onNewOrder }) {
       {pixAlive ? (
         <>
           <p className="my-order-timer">
-            Conclua o pagamento em até: <strong>{formatCountdown(msLeft)}</strong>
+            Tempo restante: <strong>{formatCountdown(msLeft)}</strong>
           </p>
-          {order.pixCopy ? (
-            <div className="my-order-pix">
-              <code>{shortPix(order.pixCopy)}</code>
-              <button type="button" className="linkish" onClick={() => onCopy(order)}>
-                {copiedId === order.id ? "Copiado" : "Copiar"}
-              </button>
-            </div>
-          ) : null}
+          <p className="hint">Chave Pix copia e cola</p>
+          <textarea className="my-order-pix-code" readOnly value={order.pixCopy} rows={3} />
+          <div className="my-order-actions">
+            <button type="button" className="primary" onClick={() => onCopy(order)}>
+              {copiedId === order.id ? "Código copiado" : "Copiar código Pix"}
+            </button>
+            <button type="button" className="ghost" onClick={() => onPay(order)}>
+              Abrir pagamento
+            </button>
+          </div>
           <p className="muted">Para pagar com cartão, inicie um novo pedido. Este Pix continua válido.</p>
         </>
       ) : null}
@@ -72,13 +69,6 @@ function OrderCard({ order, now, onPay, onCopy, copiedId, onNewOrder }) {
             .map((item) => `${item.qty || 1}× ${item.name}`)
             .join(" · ")}
         </p>
-      ) : null}
-      {pixAlive ? (
-        <div className="my-order-actions">
-          <button type="button" className="primary" onClick={() => onPay(order)}>
-            Pagar agora
-          </button>
-        </div>
       ) : null}
     </article>
   );
@@ -134,7 +124,7 @@ export default function Orders() {
       setCopiedId(order.id);
       setTimeout(() => setCopiedId(""), 2000);
     } catch {
-      /* o cliente ainda pode abrir Pagar agora */
+      /* o cliente ainda pode abrir o pagamento */
     }
   }
 

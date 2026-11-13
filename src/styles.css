@@ -1890,6 +1890,20 @@ html.dark .form-error {
   white-space: nowrap;
 }
 
+.my-order-pix-code {
+  width: 100%;
+  min-height: 72px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg, #f6f6f6);
+  font-size: 12px;
+  line-height: 1.4;
+  resize: none;
+  word-break: break-all;
+}
+
 .my-order-status {
   margin: 0;
   font-size: 13px;

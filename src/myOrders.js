@@ -56,9 +56,19 @@ export function upsertMyOrder(slug, patch = {}) {
   return readMyOrders(slug);
 }
 
+const PIX_SOFT_MS = 5 * 60 * 1000;
+
+export function orderExpiresAt(row) {
+  const explicit = Number(row?.expiresAt || 0);
+  if (explicit > 0) return explicit;
+  if (row?.payment !== "pix") return 0;
+  const created = Date.parse(String(row?.createdAt || "")) || 0;
+  return created ? created + PIX_SOFT_MS : 0;
+}
+
 export function myOrderStatus(row, now = Date.now()) {
   if (row?.status === "paid" || row?.paid) return "paid";
-  const expiresAt = Number(row?.expiresAt || 0);
+  const expiresAt = orderExpiresAt(row);
   if (row?.payment === "pix" && expiresAt > 0 && expiresAt <= now) return "expired";
   if (row?.status === "canceled") return "canceled";
   if (row?.payment === "pix" && row?.pixCopy) return "pending";
