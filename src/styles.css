@@ -1837,6 +1837,17 @@ html.dark .form-error {
   gap: 16px;
 }
 
+.orders-list > section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.orders-list > section > .block-title {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
 .my-order {
   background: var(--card);
   border-radius: 16px;
