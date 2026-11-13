@@ -45,6 +45,7 @@ function CardPayForm({ confirming, onError, onPaid, onPending, payerEmail = "", 
           billing_details: {
             name: billingName,
             email: billingEmail || undefined,
+            address: { country: "BR" },
           },
         },
       },
