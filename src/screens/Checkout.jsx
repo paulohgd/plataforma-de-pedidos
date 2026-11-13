@@ -707,7 +707,10 @@ export default function Checkout() {
               </label>
               {quoting ? <p className="hint">Calculando entrega…</p> : null}
               {delivery && !delivery.error ? (
-                <p className="hint">{deliveryFeeLabel(delivery.fee)} · {deliveryRulesHint(shop)}</p>
+                <>
+                  <p className="hint">{deliveryFeeLabel(delivery)}</p>
+                  <p className="hint">{deliveryRulesHint(shop)}</p>
+                </>
               ) : null}
               {delivery?.error ? <p className="form-error">{delivery.error}</p> : null}
             </>
