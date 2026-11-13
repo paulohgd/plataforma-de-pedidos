@@ -134,17 +134,17 @@ export default function Checkout() {
   const payTotal = Number((total - discount + deliveryFee).toFixed(2));
   const deliveryCep = cepDigits(customer.cep);
   const stripeKey = publicKey || shop.stripePublishableKey || shop.mpPublicKey;
-  const deliveryReady =
+  const addressReady =
     customer.mode !== "entrega" ||
     Boolean(
       deliveryCep.length === 8 &&
         String(customer.number || "").trim() &&
         customer.city &&
-        delivery &&
-        !delivery.error &&
-        !quoting &&
         !cepError,
     );
+  const deliveryReady =
+    customer.mode !== "entrega" ||
+    Boolean(addressReady && delivery && !delivery.error && !quoting);
 
   function updatePlace(patch) {
     setCustomer(patch);
@@ -240,12 +240,19 @@ export default function Checkout() {
   }, [customer.cep, customer.mode]);
 
   useEffect(() => {
-    if (customer.mode !== "entrega" || !deliveryReady) {
-      if (customer.mode !== "entrega") setDelivery(null);
+    if (customer.mode !== "entrega") {
+      setDelivery(null);
+      setQuoting(false);
+      return undefined;
+    }
+    if (!addressReady) {
+      setDelivery(null);
+      setQuoting(false);
       return undefined;
     }
     let cancel = false;
     setQuoting(true);
+    setDelivery(null);
     fetch("/api/quote-delivery", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -256,9 +263,14 @@ export default function Checkout() {
         address: composeAddress(customer),
       }),
     })
-      .then((response) => response.json())
-      .then((payload) => {
-        if (!cancel) setDelivery(payload);
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({}));
+        if (cancel) return;
+        if (!response.ok) {
+          setDelivery({ error: payload.error || "Não foi possível calcular a entrega." });
+          return;
+        }
+        setDelivery(payload);
       })
       .catch(() => {
         if (!cancel) setDelivery({ error: "Não foi possível calcular a entrega." });
@@ -269,7 +281,19 @@ export default function Checkout() {
     return () => {
       cancel = true;
     };
-  }, [customer.mode, customer.cep, customer.number, customer.city, customer.uf, shop.slug, route.slug, deliveryReady]);
+  }, [
+    customer.mode,
+    customer.cep,
+    customer.number,
+    customer.street,
+    customer.neighborhood,
+    customer.city,
+    customer.uf,
+    customer.complement,
+    shop.slug,
+    route.slug,
+    addressReady,
+  ]);
 
   useEffect(() => {
     if (!paying || method !== "card" || pixAlive || !sessionId) {
