@@ -28,12 +28,23 @@ function stripePromiseFor(key) {
   return stripeCache.get(publishable);
 }
 
-function CardPayForm({ confirming, onError, onPaid, onPending, payerEmail = "", payerName = "", billingAddress = null }) {
+function CardPayForm({
+  confirming,
+  onError,
+  onPaid,
+  onPending,
+  payerEmail = "",
+  payerName = "",
+  payerPhone = "",
+  billingAddress = null,
+}) {
   const stripe = useStripe();
   const elements = useElements();
   const [elementReady, setElementReady] = useState(false);
   const billingName = String(payerName || "Cliente").trim().slice(0, 120) || "Cliente";
   const billingEmail = String(payerEmail || "").trim();
+  const digits = String(payerPhone || "").replace(/\D/g, "");
+  const billingPhone = digits ? (digits.startsWith("55") ? `+${digits}` : `+55${digits}`) : "+5511999999999";
   const address = {
     country: "BR",
     postal_code: String(billingAddress?.postal_code || "").replace(/\D/g, "").slice(0, 8) || "01001000",
@@ -53,6 +64,7 @@ function CardPayForm({ confirming, onError, onPaid, onPending, payerEmail = "", 
           billing_details: {
             name: billingName,
             email: billingEmail || undefined,
+            phone: billingPhone,
             address,
           },
         },
@@ -146,8 +158,8 @@ export default function Checkout() {
       shopLogo: shop.logo,
       total: payTotal,
       items: lines.map((line) => ({ name: line.product?.name || line.name, qty: line.qty, total: line.total })),
-      createdAt: new Date().toISOString(),
       ...patch,
+      createdAt: patch.createdAt || new Date().toISOString(),
     });
   }
 
@@ -526,6 +538,7 @@ export default function Checkout() {
                     confirming={confirming}
                     payerEmail={payerEmail}
                     payerName={customer.name}
+                    payerPhone={customer.whatsapp}
                     billingAddress={{
                       postal_code: deliveryCep.length === 8 ? deliveryCep : cepDigits(shop.cep),
                       state: customer.uf || "",

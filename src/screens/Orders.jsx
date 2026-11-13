@@ -8,8 +8,9 @@ import { BottomNav, PageHead, Thumb } from "../ui";
 function OrderCard({ order, now, onPay, onCopy, copiedId, onNewOrder }) {
   const status = myOrderStatus(order, now);
   const expiresAt = orderExpiresAt(order);
-  const msLeft = expiresAt ? expiresAt - now : 0;
-  const pixAlive = status === "pending" && order.payment === "pix" && Boolean(order.pixCopy) && msLeft > 0;
+  const msLeft = Math.max(0, expiresAt - now);
+  const hasPix = Boolean(order.pixCopy) && (order.payment === "pix" || !order.payment);
+  const pixAlive = status === "pending" && hasPix && msLeft > 0;
   const items = Array.isArray(order.items) ? order.items.filter((item) => Number(item.qty) > 0) : [];
   return (
     <article className="my-order">
@@ -18,14 +19,14 @@ function OrderCard({ order, now, onPay, onCopy, copiedId, onNewOrder }) {
         <div>
           <strong>{order.shopName || "Pedido"}</strong>
           <p className="muted">
-            {order.payment === "card" ? "Pagamento via cartão" : "Pagamento via Pix"}
+            {order.payment === "card" && !hasPix ? "Pagamento via cartão" : "Pagamento via Pix"}
             {order.total ? ` · ${money(Number(order.total) || 0)}` : ""}
           </p>
         </div>
       </div>
       {pixAlive ? (
         <>
-          <p className="my-order-timer">
+          <p className="my-order-timer" aria-live="polite">
             Tempo restante: <strong>{formatCountdown(msLeft)}</strong>
           </p>
           <p className="hint">Chave Pix copia e cola</p>

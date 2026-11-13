@@ -35,6 +35,17 @@ export function sortMyOrders(rows = []) {
     .sort((a, b) => orderTime(b) - orderTime(a) || String(b.id || "").localeCompare(String(a.id || "")));
 }
 
+const PIX_SOFT_MS = 5 * 60 * 1000;
+
+export function orderExpiresAt(row) {
+  const explicit = Number(row?.expiresAt || 0);
+  if (explicit > 0) return explicit;
+  const isPix = row?.payment === "pix" || Boolean(row?.pixCopy);
+  if (!isPix) return 0;
+  const created = Date.parse(String(row?.createdAt || "")) || 0;
+  return created ? created + PIX_SOFT_MS : 0;
+}
+
 export function upsertMyOrder(slug, patch = {}) {
   const id = String(patch.id || "").trim();
   if (!slug || !id) return readMyOrders(slug);
@@ -43,6 +54,11 @@ export function upsertMyOrder(slug, patch = {}) {
   const current = index >= 0 ? rows[index] : {};
   const next = { ...current, ...patch, id };
   if (!next.createdAt) next.createdAt = current.createdAt || new Date().toISOString();
+  if ((next.payment === "pix" || next.pixCopy) && !Number(next.expiresAt)) {
+    const created = Date.parse(String(next.createdAt || "")) || Date.now();
+    next.expiresAt = created + PIX_SOFT_MS;
+    next.payment = next.payment || "pix";
+  }
   if (next.status === "paid") {
     next.paid = true;
     next.expiresAt = 0;
@@ -56,22 +72,13 @@ export function upsertMyOrder(slug, patch = {}) {
   return readMyOrders(slug);
 }
 
-const PIX_SOFT_MS = 5 * 60 * 1000;
-
-export function orderExpiresAt(row) {
-  const explicit = Number(row?.expiresAt || 0);
-  if (explicit > 0) return explicit;
-  if (row?.payment !== "pix") return 0;
-  const created = Date.parse(String(row?.createdAt || "")) || 0;
-  return created ? created + PIX_SOFT_MS : 0;
-}
-
 export function myOrderStatus(row, now = Date.now()) {
   if (row?.status === "paid" || row?.paid) return "paid";
+  const isPix = row?.payment === "pix" || Boolean(row?.pixCopy);
   const expiresAt = orderExpiresAt(row);
-  if (row?.payment === "pix" && expiresAt > 0 && expiresAt <= now) return "expired";
+  if (isPix && expiresAt > 0 && expiresAt <= now) return "expired";
   if (row?.status === "canceled") return "canceled";
-  if (row?.payment === "pix" && row?.pixCopy) return "pending";
+  if (isPix && row?.pixCopy) return "pending";
   return row?.status || "pending";
 }
 
@@ -102,8 +109,15 @@ export async function refreshMyOrder(slug, id) {
   if (payload.shopLogo) patch.shopLogo = payload.shopLogo;
   if (payload.payment) patch.payment = payload.payment;
   if (!payload.paid) {
-    if (payload.pixCopy) patch.pixCopy = payload.pixCopy;
-    if (payload.expiresAt) patch.expiresAt = Number(payload.expiresAt) || 0;
+    if (payload.pixCopy) {
+      patch.pixCopy = payload.pixCopy;
+      patch.payment = patch.payment || payload.payment || "pix";
+    }
+    const serverExp = Number(payload.expiresAt || 0);
+    const current = readMyOrders(slug).find((row) => row.id === sessionId);
+    const localExp = Number(current?.expiresAt || 0);
+    if (serverExp > 0) patch.expiresAt = serverExp;
+    else if (localExp > 0) patch.expiresAt = localExp;
   }
   if (payload.total != null) patch.total = Number(payload.total) || 0;
   if (Array.isArray(payload.items)) patch.items = payload.items;
