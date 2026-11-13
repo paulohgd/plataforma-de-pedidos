@@ -254,7 +254,7 @@ export async function saveShopSecrets(shopId, { stripeSecretKey, mpAccessToken, 
   const token = String(stripeSecretKey || mpAccessToken || "").trim();
   const discord = String(discordWebhookUrl || "").trim();
   if (token && !isStripeSecretKey(token)) {
-    return "Cole a chave secreta da Stripe desta loja (sk_test_... ou sk_live_...).";
+    return "Cole a chave secreta da Stripe desta loja (sk_... ou rk_...).";
   }
   if (discord && !discord.startsWith("https://discord.com/api/webhooks/")) {
     return "O webhook do Discord deve começar com https://discord.com/api/webhooks/";

@@ -126,7 +126,7 @@ async function saveShopStripeSecrets(request, response) {
   const token = String(payload.stripeSecretKey || payload.mpAccessToken || "").trim();
   const discord = String(payload.discordWebhookUrl || "").trim();
   if (token && !isStripeSecretKey(token)) {
-    json(response, 400, { error: "Cole a chave secreta da Stripe desta loja (sk_test_... ou sk_live_...)." });
+    json(response, 400, { error: "Cole a chave secreta da Stripe desta loja (sk_... ou rk_...)." });
     return;
   }
   if (discord && !discord.startsWith("https://discord.com/api/webhooks/")) {
@@ -185,7 +185,7 @@ function missingStripeConfig(secret, publicKey) {
     return "Falta configurar as chaves da Stripe nas configurações da loja.";
   }
   if (!publicKey) return "Falta a chave pública da Stripe (pk_...) nas configurações da loja.";
-  return "Falta a chave secreta da Stripe (sk_...) nas configurações da loja. Cole de novo e salve.";
+  return "Falta a chave secreta da Stripe (sk_... ou rk_...) nas configurações da loja. Cole de novo e salve.";
 }
 
 function json(response, status, payload) {

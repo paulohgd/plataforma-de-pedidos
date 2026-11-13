@@ -7,7 +7,8 @@ export function isStripePublishableKey(value) {
 }
 
 export function isStripeSecretKey(value) {
-  return /^sk_(test|live)_[A-Za-z0-9]+$/.test(cleanStripeKey(value));
+  // sk_ = secret key completa; rk_ = restricted key (também serve no servidor)
+  return /^(sk|rk)_(test|live)_[A-Za-z0-9]+$/.test(cleanStripeKey(value));
 }
 
 export function asStripePublishableKey(value) {
@@ -21,5 +22,5 @@ export function asStripeSecretKey(value) {
 }
 
 export function isStripeTestKey(value) {
-  return /^(pk|sk)_test_/i.test(cleanStripeKey(value));
+  return /^(pk|sk|rk)_test_/i.test(cleanStripeKey(value));
 }

@@ -1118,7 +1118,7 @@ function AdminPanel() {
               type="text"
               autoComplete="off"
               spellCheck="false"
-              placeholder={secretsSaved.mercadoPago || secretsSaved.stripe ? "Salvo. Cole outra só se for trocar." : "Obrigatório. sk_live_... ou sk_test_..."}
+              placeholder={secretsSaved.mercadoPago || secretsSaved.stripe ? "Salvo. Cole outra só se for trocar." : "Obrigatório. sk_... ou rk_..."}
               value={shopForm.mpAccessToken}
               onChange={(event) => setShopForm((current) => ({ ...current, mpAccessToken: event.target.value }))}
             />

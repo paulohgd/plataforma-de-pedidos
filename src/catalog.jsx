@@ -551,7 +551,7 @@ export function CatalogProvider({ children }) {
         const status = await fetchShopSecretStatus(store.shopId);
         if (status.error) return status.error;
         if (!status.stripe && !status.mercadoPago) {
-          return "Cole a chave secreta da Stripe (sk_...) e salve. A chave pública sozinha não cobra.";
+          return "Cole a chave secreta da Stripe (sk_... ou rk_...) e salve. A chave pública sozinha não cobra.";
         }
       }
       let logo = String(shop.logo || "").trim();
