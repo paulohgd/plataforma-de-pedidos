@@ -162,7 +162,7 @@ export async function createEmbeddedCheckout(
   };
   const params = {
     mode: "payment",
-    ui_mode: "embedded",
+    ui_mode: "embedded_page",
     locale: "pt-BR",
     customer_creation: "if_required",
     return_url: returnUrl,

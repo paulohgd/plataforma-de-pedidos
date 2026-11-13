@@ -219,7 +219,12 @@ export default function Checkout() {
       }
       clearParentOrder(shop.slug);
       checkoutRef.current?.destroy?.();
-      const checkout = await stripe.initEmbeddedCheckout({ clientSecret: payload.clientSecret });
+      const clientSecret = payload.clientSecret;
+      const checkout = stripe.createEmbeddedCheckoutPage
+        ? await stripe.createEmbeddedCheckoutPage({
+            fetchClientSecret: async () => clientSecret,
+          })
+        : await stripe.initEmbeddedCheckout({ clientSecret });
       checkoutRef.current = checkout;
       pendingMount.current = checkout;
       setPaying(true);
