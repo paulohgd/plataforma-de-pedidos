@@ -772,7 +772,7 @@ async function createPix(request, response) {
     if (isMpTestMode(publicKey, token)) payer.first_name = "APRO";
     let created = await createMpOrder(
       token,
-      mpPaymentBody(existing, payer, { id: "pix", type: "bank_transfer", expiration_time: "PT30M" }, place),
+      mpPaymentBody(existing, payer, { id: "pix", type: "bank_transfer", expiration_time: "PT5M" }, place),
       { deviceId: String(payload.deviceId || "").trim() },
     );
     created = await waitForMpOrder(token, created, { wantPix: true });
