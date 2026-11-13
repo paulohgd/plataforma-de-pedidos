@@ -1005,10 +1005,15 @@ select {
   pointer-events: none;
 }
 
-.pay-box {
+.pay-box,
+.stripe-box {
   min-height: 280px;
   margin-top: 8px;
   overflow-x: clip;
+}
+
+.stripe-box {
+  min-height: 420px;
 }
 
 .pay-box [id*="installment" i],

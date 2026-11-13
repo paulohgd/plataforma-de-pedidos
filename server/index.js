@@ -19,14 +19,19 @@ import { sendShopDiscord } from "./discord.js";
 import { sendShopWhatsApp } from "./evolution.js";
 import { quoteDelivery } from "./freight.js";
 import {
+  amountToCents,
   cancelIntent,
+  checkoutSessionPaid,
   constructWebhookEvent,
   createCardIntent,
+  createEmbeddedCheckout,
   createPixIntent,
   paymentKindFromIntent,
   pixFromIntent,
+  retrieveCheckoutSession,
   retrieveIntent,
   searchPaidIntentByOrder,
+  stripeCsId,
   stripePaymentClosed,
   stripePaymentPaid,
   stripePiId,
@@ -320,15 +325,33 @@ async function flagDuplicatePayments(paidOrder) {
   console.error("Pagamento duplicado:", paidOrder.id, other.id);
 }
 
-async function fulfill(orderId, intent) {
-  if (!orderId || !stripePaymentPaid(intent)) return null;
+function paymentIntentIdFrom(value) {
+  if (!value) return "";
+  if (typeof value === "string") return stripePiId(value);
+  return stripePiId(value.id);
+}
+
+function paymentKindFromSession(session) {
+  const intent = typeof session?.payment_intent === "object" ? session.payment_intent : null;
+  if (intent) return paymentKindFromIntent(intent);
+  return "card";
+}
+
+async function fulfill(orderId, intent, session = null) {
+  if (!orderId) return null;
+  if (session) {
+    if (!checkoutSessionPaid(session)) return null;
+  } else if (!stripePaymentPaid(intent)) {
+    return null;
+  }
   const paidAt = new Date().toISOString();
-  const payment = paymentKindFromIntent(intent);
-  const intentId = String(intent.id || "");
+  const payment = session ? paymentKindFromSession(session) : paymentKindFromIntent(intent);
+  const intentId = paymentIntentIdFrom(session?.payment_intent) || String(intent?.id || "");
+  const sessionId = stripeCsId(session?.id) || "";
   const patch = {
     status: "paid",
     paid_at: paidAt,
-    stripe_session_id: intentId,
+    stripe_session_id: sessionId || intentId,
     stripe_payment_intent: intentId,
     payment_method: payment,
   };
@@ -427,6 +450,25 @@ async function settleOrder(existing) {
   if (existing.status === "paid") return existing;
   const secret = await secretForShop(existing.shop_id);
   if (!secret) return existing;
+
+  const csId = stripeCsId(existing.stripe_session_id);
+  if (csId) {
+    try {
+      const session = await retrieveCheckoutSession(secret, csId);
+      if (checkoutSessionPaid(session)) {
+        const intent =
+          typeof session.payment_intent === "object"
+            ? session.payment_intent
+            : session.payment_intent
+              ? await retrieveIntent(secret, session.payment_intent).catch(() => null)
+              : null;
+        return (await fulfill(existing.id, intent, session)) || existing;
+      }
+    } catch (error) {
+      console.error("Consulta Checkout Stripe:", error.message);
+    }
+  }
+
   const piId = stripePiId(existing.stripe_session_id) || stripePiId(existing.stripe_payment_intent);
   let intent = null;
   if (piId) {
@@ -680,12 +722,66 @@ async function createCheckout(request, response) {
     return;
   }
 
-  json(response, 200, {
-    sessionId: order.id,
-    publicKey,
-    payerEmail: checkoutEmail(whatsapp, order.id),
-    parentOrderId: order.parent_order_id || parent?.id || "",
-  });
+  const origin = String(payload.origin || request.headers.origin || "").replace(/\/$/, "");
+  const returnUrl = origin
+    ? `${origin}/loja/${encodeURIComponent(slug)}/pedido-pago?session_id={CHECKOUT_SESSION_ID}`
+    : undefined;
+  if (!returnUrl) {
+    await supabase.from("orders").update({ status: "canceled" }).eq("id", order.id);
+    json(response, 400, { error: "Origem do checkout inválida." });
+    return;
+  }
+
+  const stripeLines = [
+    ...quoted.lines.map((line) => ({
+      name: line.name,
+      qty: line.qty,
+      unit: line.unit,
+      total: line.total,
+      options: line.options,
+    })),
+  ];
+  if (delivery && delivery.fee > 0) {
+    stripeLines.push({
+      name: `Entrega (${formatKm(delivery.km)})`,
+      qty: 1,
+      unit: delivery.fee,
+      total: delivery.fee,
+      options: [],
+    });
+  }
+
+  try {
+    const session = await createEmbeddedCheckout(accessToken, {
+      orderId: order.id,
+      shopId: store.shopId,
+      slug,
+      returnUrl,
+      lines: stripeLines,
+      email: checkoutEmail(whatsapp, order.id),
+      discountCents: discount > 0 ? amountToCents(discount) : 0,
+      discountLabel: coupon ? `Cupom ${coupon.code}` : "Desconto",
+    });
+    await supabase
+      .from("orders")
+      .update({ stripe_session_id: session.id })
+      .eq("id", order.id);
+    json(response, 200, {
+      sessionId: order.id,
+      checkoutSessionId: session.id,
+      clientSecret: session.client_secret,
+      publishableKey: publicKey,
+      publicKey,
+      payerEmail: checkoutEmail(whatsapp, order.id),
+      parentOrderId: order.parent_order_id || parent?.id || "",
+    });
+  } catch (error) {
+    console.error("Checkout Stripe:", error.message);
+    await supabase.from("orders").update({ status: "canceled" }).eq("id", order.id);
+    json(response, 500, {
+      error: stripePublicError(error, "Não foi possível iniciar o pagamento."),
+    });
+  }
 }
 
 async function shopCopy(shopId) {
@@ -1013,11 +1109,44 @@ async function handleWebhook(request, response) {
   }
 
   const type = String(event.type || "").toLowerCase();
-  const intent = event.data?.object && typeof event.data.object === "object" ? event.data.object : {};
+  const object = event.data?.object && typeof event.data.object === "object" ? event.data.object : {};
+
+  if (type.startsWith("checkout.session.")) {
+    const sessionId = stripeCsId(object.id);
+    const orderId = String(object.metadata?.order_id || "").trim();
+    let existing = null;
+    if (orderId) {
+      existing = (await supabase.from("orders").select("*").eq("id", orderId).maybeSingle()).data;
+    }
+    if (!existing && sessionId) {
+      existing = (await supabase.from("orders").select("*").eq("stripe_session_id", sessionId).maybeSingle()).data;
+    }
+    if (existing && existing.status !== "paid" && checkoutSessionPaid(object)) {
+      try {
+        const secret = await secretForShop(existing.shop_id);
+        const session = secret
+          ? (await retrieveCheckoutSession(secret, sessionId || object.id).catch(() => object))
+          : object;
+        const intent =
+          typeof session.payment_intent === "object"
+            ? session.payment_intent
+            : session.payment_intent && secret
+              ? await retrieveIntent(secret, session.payment_intent).catch(() => null)
+              : null;
+        await fulfill(existing.id, intent, session);
+      } catch (error) {
+        console.error("Webhook checkout:", error.message);
+      }
+    }
+    json(response, 200, { received: true });
+    return;
+  }
+
   if (type && !type.startsWith("payment_intent.")) {
     json(response, 200, { received: true });
     return;
   }
+  const intent = object;
   const existing = await findOrderFromStripe(intent);
   if (!existing) {
     json(response, 200, { received: true });
@@ -1030,13 +1159,7 @@ async function handleWebhook(request, response) {
   try {
     const secret = await secretForShop(existing.shop_id);
     const fresh = secret ? await retrieveIntent(secret, intent.id).catch(() => intent) : intent;
-    await applyStripeIntent(
-      {
-        ...existing,
-        stripe_session_id: fresh.id || existing.stripe_session_id,
-      },
-      fresh,
-    );
+    await applyStripeIntent(existing, fresh);
   } catch (error) {
     console.error("Webhook:", error.message);
   }

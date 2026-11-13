@@ -2,7 +2,7 @@ const SESSION_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 export function isCheckoutSessionId(value) {
   const id = String(value || "").trim();
-  return SESSION_RE.test(id) || /^ORD/i.test(id);
+  return SESSION_RE.test(id) || /^ORD/i.test(id) || /^cs_[A-Za-z0-9]+$/.test(id);
 }
 
 function sessionKey(slug) {

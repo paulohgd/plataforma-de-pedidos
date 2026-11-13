@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-stripe-js";
 import { loadStripe } from "@stripe/stripe-js";
 import { useCatalog } from "../catalog";
 import { cepDigits, composeAddress, formatCep, lookupCep } from "../cep";
-import { formatCountdown, formatPhone, money, phoneDigits, validEmail, validPhone } from "../format";
+import { formatPhone, money, phoneDigits, validPhone } from "../format";
 import { cleanCouponCode, couponDiscount, findCoupon } from "../coupons";
 import { cleanMinOrder, deliveryFeeLabel, deliveryRulesHint } from "../freight";
 import { useCart } from "../cart";
@@ -11,95 +10,33 @@ import { formatOption } from "../order";
 import { upsertMyOrder } from "../myOrders";
 import {
   clearParentOrder,
-  fetchCheckoutSession,
   readParentOrderId,
   rememberCheckoutSession,
-  rememberParentOrder,
 } from "../pay";
 import { useUI } from "../router";
 import { PageHead } from "../ui";
 
-const stripeCache = new Map();
-
-function stripePromiseFor(key) {
-  const publishable = String(key || "").trim();
-  if (!publishable) return null;
-  if (!stripeCache.has(publishable)) stripeCache.set(publishable, loadStripe(publishable));
-  return stripeCache.get(publishable);
-}
-
-function CardPayForm({ confirming, onError, onPaid, onPending }) {
-  const stripe = useStripe();
-  const elements = useElements();
-
-  async function pay() {
-    if (!stripe || !elements) throw new Error("Aguarde o cartão carregar.");
-    const result = await stripe.confirmPayment({
-      elements,
-      redirect: "if_required",
-      confirmParams: {
-        return_url: `${window.location.origin}${window.location.pathname}`,
-      },
-    });
-    if (result.error) throw new Error(result.error.message || "Não foi possível pagar com cartão.");
-    if (result.paymentIntent?.status === "succeeded") {
-      onPaid();
-      return;
-    }
-    onPending();
-  }
-
-  return (
-    <div className="pay-box stripe-card-box">
-      <PaymentElement
-        options={{
-          layout: "tabs",
-          fields: { billingDetails: { email: "never" } },
-        }}
-        onLoadError={() => onError("Não foi possível abrir o cartão.")}
-      />
-      <button type="button" className="primary" disabled={confirming || !stripe} onClick={() => pay().catch((err) => onError(err.message))}>
-        <span>{confirming ? "Processando…" : "Pagar"}</span>
-      </button>
-    </div>
-  );
-}
-
 export default function Checkout() {
   const { shop, ready, missing } = useCatalog();
   const { lines, total, customer, setCustomer, clear } = useCart();
-  const { goHome, route, openPaid, openPixPay } = useUI();
+  const { goHome, route } = useUI();
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const [paying, setPaying] = useState(false);
-  const [confirming, setConfirming] = useState(false);
-  const [method, setMethod] = useState("pix");
-  const [pixCopy, setPixCopy] = useState("");
-  const [pixExpiresAt, setPixExpiresAt] = useState(0);
-  const [now, setNow] = useState(() => Date.now());
-  const [copied, setCopied] = useState(false);
-  const [sessionId, setSessionId] = useState("");
-  const [cardEmail, setCardEmail] = useState("");
-  const [publicKey, setPublicKey] = useState("");
-  const [clientSecret, setClientSecret] = useState("");
-  const [cardReady, setCardReady] = useState(false);
-  const [completing, setCompleting] = useState(false);
   const [delivery, setDelivery] = useState(null);
   const [quoting, setQuoting] = useState(false);
   const [cepError, setCepError] = useState("");
   const [couponInput, setCouponInput] = useState("");
   const whatsappBox = useRef(null);
-  const leaving = useRef(false);
+  const box = useRef(null);
+  const checkoutRef = useRef(null);
+  const pendingMount = useRef(null);
   const waiting = !ready || (route.slug && shop.slug !== route.slug && !missing);
-  const pixMsLeft = pixExpiresAt ? pixExpiresAt - now : 0;
-  const pixAlive = Boolean(pixCopy) && pixMsLeft > 0;
   const deliveryFee = customer.mode === "entrega" && delivery && !delivery.error ? Number(delivery.fee) || 0 : 0;
   const coupon = findCoupon(shop.coupons, couponInput);
   const discount = couponDiscount(total, coupon);
   const payTotal = Number((total - discount + deliveryFee).toFixed(2));
   const deliveryCep = cepDigits(customer.cep);
-  const stripeKey = publicKey || shop.stripePublishableKey || shop.mpPublicKey;
-  const brickEmail = validEmail(cardEmail) ? cardEmail.trim().toLowerCase() : "";
   const deliveryReady =
     customer.mode !== "entrega" ||
     Boolean(
@@ -116,63 +53,21 @@ export default function Checkout() {
     setCustomer(patch);
   }
 
-  function rememberOrder(patch) {
-    const slug = shop.slug || route.slug;
-    upsertMyOrder(slug, {
-      id: sessionId,
-      shopName: shop.name,
-      shopLogo: shop.logo,
-      total: payTotal,
-      items: lines.map((line) => ({ name: line.product?.name || line.name, qty: line.qty, total: line.total })),
-      createdAt: new Date().toISOString(),
-      ...patch,
-    });
-  }
-
-  function goPaid(id = sessionId) {
-    if (leaving.current) return;
-    leaving.current = true;
-    const slug = shop.slug || route.slug;
-    rememberCheckoutSession(slug, id);
-    rememberOrder({ id, status: "paid", payment: method === "card" ? "card" : "pix" });
-    if (slug) localStorage.removeItem(`pedido-sacola:${slug}`);
-    setCompleting(true);
-    openPaid(id);
-  }
-
-  function goPix(copy, expiresAt) {
-    if (leaving.current) return;
-    leaving.current = true;
-    const slug = shop.slug || route.slug;
-    rememberCheckoutSession(slug, sessionId);
-    rememberParentOrder(slug, sessionId);
-    rememberOrder({
-      payment: "pix",
-      pixCopy: copy,
-      expiresAt: Number(expiresAt) || 0,
-      status: "pending",
-    });
-    setCompleting(true);
-    openPixPay(sessionId);
-    clear();
-  }
-
-  function startNewCheckoutForCard() {
-    const slug = shop.slug || route.slug;
-    if (sessionId) rememberParentOrder(slug, sessionId);
-    setError("Você já iniciou um pagamento via Pix. Monte a sacola de novo e pague com cartão em um novo pedido.");
-    goHome();
-  }
+  useEffect(
+    () => () => {
+      checkoutRef.current?.destroy?.();
+      pendingMount.current = null;
+    },
+    [],
+  );
 
   useEffect(() => {
-    if (customer.email) setCustomer({ email: "" });
-  }, [customer.email]);
-
-  useEffect(() => {
-    if (!pixExpiresAt) return undefined;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [pixExpiresAt]);
+    if (!paying || !pendingMount.current || !box.current) return undefined;
+    const checkout = pendingMount.current;
+    pendingMount.current = null;
+    checkout.mount(box.current);
+    return undefined;
+  }, [paying]);
 
   useEffect(() => {
     if (customer.mode !== "entrega") {
@@ -203,7 +98,7 @@ export default function Checkout() {
     return () => {
       cancel = true;
     };
-  }, [customer.cep, customer.mode]);
+  }, [customer.cep, customer.mode, setCustomer]);
 
   useEffect(() => {
     if (customer.mode !== "entrega" || !deliveryReady) {
@@ -235,42 +130,16 @@ export default function Checkout() {
     return () => {
       cancel = true;
     };
-  }, [customer.mode, customer.cep, customer.number, customer.city, customer.uf, shop.slug, route.slug, deliveryReady]);
-
-  useEffect(() => {
-    if (!paying || method !== "card" || pixAlive || !sessionId || !brickEmail) {
-      setClientSecret("");
-      setCardReady(false);
-      return undefined;
-    }
-    let cancel = false;
-    setCardReady(false);
-    setClientSecret("");
-    (async () => {
-      const response = await fetch("/api/pay-card", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId, email: brickEmail }),
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (cancel) return;
-      if (payload.paid) {
-        goPaid();
-        return;
-      }
-      if (!response.ok || !payload.clientSecret) {
-        setError(payload.error || "Não foi possível preparar o cartão.");
-        return;
-      }
-      setClientSecret(payload.clientSecret);
-      setCardReady(true);
-    })().catch(() => {
-      if (!cancel) setError("Não foi possível preparar o cartão.");
-    });
-    return () => {
-      cancel = true;
-    };
-  }, [paying, method, pixAlive, sessionId, brickEmail]);
+  }, [
+    customer.mode,
+    customer.cep,
+    customer.number,
+    customer.city,
+    customer.uf,
+    shop.slug,
+    route.slug,
+    deliveryReady,
+  ]);
 
   async function submit(event) {
     event.preventDefault();
@@ -288,7 +157,7 @@ export default function Checkout() {
       setError(cepError || "Complete o endereço de entrega.");
       return;
     }
-    if (!(shop.stripePublishableKey || shop.mpPublicKey || publicKey)) {
+    if (!(shop.stripePublishableKey || shop.mpPublicKey)) {
       setError("Esta loja ainda não configurou o pagamento.");
       return;
     }
@@ -300,6 +169,7 @@ export default function Checkout() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           slug: shop.slug || route.slug,
+          origin: window.location.origin,
           parentOrderId,
           customer: {
             name: customer.name,
@@ -328,15 +198,32 @@ export default function Checkout() {
         }),
       });
       const payload = await response.json();
-      if (!response.ok || !payload.sessionId) {
+      if (!response.ok || !payload.clientSecret) {
         setError(payload.error || "Não foi possível iniciar o pagamento.");
         return;
       }
-      setSessionId(payload.sessionId);
-      setPublicKey(payload.publicKey || shop.stripePublishableKey || shop.mpPublicKey);
-      rememberCheckoutSession(shop.slug, payload.sessionId);
+      const publishable = payload.publishableKey || payload.publicKey || shop.stripePublishableKey || shop.mpPublicKey;
+      const stripe = await loadStripe(publishable);
+      if (!stripe) {
+        setError("Não foi possível abrir o pagamento.");
+        return;
+      }
+      if (payload.sessionId) {
+        rememberCheckoutSession(shop.slug, payload.sessionId);
+        upsertMyOrder(shop.slug, {
+          id: payload.sessionId,
+          status: "pending",
+          total: payTotal,
+          createdAt: new Date().toISOString(),
+        });
+      }
       clearParentOrder(shop.slug);
+      checkoutRef.current?.destroy?.();
+      const checkout = await stripe.initEmbeddedCheckout({ clientSecret: payload.clientSecret });
+      checkoutRef.current = checkout;
+      pendingMount.current = checkout;
       setPaying(true);
+      clear();
     } catch {
       setError("Não foi possível falar com o servidor de pagamento. Rode npm run pay.");
     } finally {
@@ -344,91 +231,14 @@ export default function Checkout() {
     }
   }
 
-  async function confirmPay() {
-    setConfirming(true);
-    setError("");
-    try {
-      const place = {
-        cep: customer.cep,
-        street: customer.street,
-        number: customer.number,
-        neighborhood: customer.neighborhood,
-        city: customer.city,
-        uf: customer.uf,
-        complement: customer.complement,
-      };
-      if (method === "card" && pixAlive) {
-        setMethod("pix");
-        throw new Error("Você já iniciou um pagamento via Pix. Para pagar com cartão, inicie um novo pedido.");
-      }
-      if (method !== "pix") return;
-      if (pixAlive) return;
-      const response = await fetch("/api/create-pix", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId,
-          email: brickEmail || undefined,
-          place,
-        }),
-      });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Não foi possível gerar o Pix.");
-      if (payload.paid) {
-        goPaid();
-        return;
-      }
-      if (payload.pending) {
-        setCompleting(true);
-        return;
-      }
-      if (!payload.pixCopy) {
-        throw new Error(payload.error || "Não foi possível gerar o Pix. Tente de novo.");
-      }
-      goPix(payload.pixCopy, payload.expiresAt);
-    } catch (failure) {
-      setError(failure.message || "Não foi possível concluir o pagamento.");
-    } finally {
-      setConfirming(false);
-    }
-  }
-
-  async function copyPix() {
-    try {
-      await navigator.clipboard.writeText(pixCopy);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      setError("Não foi possível copiar. Selecione o código e copie.");
-    }
-  }
-
-  const busy = pending || confirming || completing;
-  const stripePromise = stripePromiseFor(stripeKey);
-
   return (
     <div className="checkout-page">
       <PageHead title={paying ? "Pagamento" : "Seus dados"} />
-      {busy ? (
-        <div className="pay-loading" role="status" aria-live="polite">
-          <span className="pay-spinner" aria-hidden="true" />
-          <h2>
-            {completing
-              ? "Confirmando o pagamento"
-              : confirming && method === "pix"
-                ? "Gerando o Pix"
-                : confirming
-                  ? "Processando o cartão"
-                  : "Preparando o pagamento"}
-          </h2>
-          <p>Aguarde alguns segundos. Não feche esta tela.</p>
-        </div>
-      ) : null}
       {waiting ? (
         <div className="empty">
           <h2>Carregando o pedido</h2>
         </div>
-      ) : lines.length === 0 ? (
+      ) : lines.length === 0 && !paying ? (
         <div className="empty">
           <h2>Sua sacola está vazia</h2>
           <button type="button" className="primary" onClick={goHome}>
@@ -437,119 +247,13 @@ export default function Checkout() {
         </div>
       ) : paying ? (
         <div className="form">
-          <p className="hint">
-            {customer.name} · {formatPhone(customer.whatsapp)} · {money(payTotal)}
-          </p>
-          {pixAlive ? null : (
-            <div className="pay-tabs">
-              <button
-                type="button"
-                className={method === "pix" ? "choice on" : "choice"}
-                onClick={() => {
-                  setMethod("pix");
-                  setError("");
-                }}
-              >
-                Pix
-              </button>
-              <button
-                type="button"
-                className={method === "card" ? "choice on" : "choice"}
-                onClick={() => {
-                  setMethod("card");
-                  setError("");
-                }}
-              >
-                Cartão
-              </button>
-            </div>
-          )}
-          {method === "pix" || pixAlive ? (
-            pixAlive ? (
-              <div className="pix-copy">
-                <p className="hint">Cole este código no app do banco. Não usamos QR Code.</p>
-                <textarea readOnly value={pixCopy} />
-                <button type="button" className="ghost" onClick={copyPix}>
-                  {copied ? "Código copiado" : "Copiar código Pix"}
-                </button>
-                <p className={pixMsLeft <= 60000 ? "pix-timer ending" : "pix-timer"}>
-                  Código válido por {formatCountdown(pixMsLeft)}
-                </p>
-                <p className="hint">Aguardando o pagamento…</p>
-                <p className="hint">Você já iniciou um pagamento via Pix. Para pagar com cartão, será necessário iniciar um novo pedido.</p>
-                <button type="button" className="ghost" onClick={startNewCheckoutForCard}>
-                  Iniciar novo pedido com cartão
-                </button>
-              </div>
-            ) : pixCopy || pixExpiresAt ? (
-              <p className="hint">Este código Pix expirou. Faça um novo pedido para pagar com Pix ou cartão.</p>
-            ) : (
-              <p className="hint">Ao gerar o Pix, este pedido fica só no Pix. Cartão exige um novo pedido.</p>
-            )
-          ) : null}
-          {method === "card" && !pixAlive ? (
-            <>
-              <label>
-                E-mail do cartão
-                <input
-                  type="email"
-                  autoComplete="email"
-                  maxLength={120}
-                  placeholder="seu@email.com"
-                  value={cardEmail}
-                  onChange={(event) => setCardEmail(event.target.value)}
-                />
-              </label>
-              {!brickEmail ? (
-                <p className="hint">Informe um e-mail real para liberar o cartão.</p>
-              ) : null}
-              {brickEmail && !cardReady ? <p className="hint">Carregando o cartão…</p> : null}
-              {brickEmail && cardReady && clientSecret && stripePromise ? (
-                <Elements
-                  stripe={stripePromise}
-                  options={{
-                    clientSecret,
-                    appearance: { theme: document.documentElement.classList.contains("dark") ? "night" : "stripe" },
-                  }}
-                >
-                  <CardPayForm
-                    confirming={confirming}
-                    onError={setError}
-                    onPaid={() => goPaid()}
-                    onPending={async () => {
-                      setCompleting(true);
-                      for (let attempt = 0; attempt < 20; attempt += 1) {
-                        await new Promise((resolve) => setTimeout(resolve, 1500));
-                        const check = await fetchCheckoutSession(sessionId);
-                        if (check.ok && check.payload?.paid) {
-                          goPaid();
-                          return;
-                        }
-                        if (check.ok && check.payload?.canceled) {
-                          setCompleting(false);
-                          setError("O pagamento não foi aprovado. Tente de novo ou pague com Pix.");
-                          return;
-                        }
-                      }
-                      setCompleting(false);
-                      setError("Ainda estamos confirmando o cartão. Veja em Pedidos.");
-                    }}
-                  />
-                </Elements>
-              ) : null}
-            </>
-          ) : null}
+          <p className="hint">Pague com Pix ou cartão na Stripe. Ao concluir, o pedido vai para a loja.</p>
           {error ? <p className="form-error">{error}</p> : null}
-          {pixAlive || method === "card" ? null : (
-            <button type="button" className="primary" disabled={confirming} onClick={confirmPay}>
-              <span>{confirming ? "Gerando…" : pixCopy && !pixAlive ? "Gerar novo código Pix" : "Pagar"}</span>
-              <span>{money(payTotal)}</span>
-            </button>
-          )}
+          <div ref={box} className="stripe-box" />
         </div>
       ) : (
         <form className="form" onSubmit={submit}>
-          <p className="hint">Informe seus dados para a loja entrar em contato. Depois você paga no cartão ou Pix, sem sair do site.</p>
+          <p className="hint">Informe seus dados para a loja entrar em contato. Depois você paga na Stripe, sem sair do site.</p>
           <label>
             Seu nome
             <input
@@ -652,7 +356,9 @@ export default function Checkout() {
               </label>
               {quoting ? <p className="hint">Calculando entrega…</p> : null}
               {delivery && !delivery.error ? (
-                <p className="hint">{deliveryFeeLabel(delivery.fee)} · {deliveryRulesHint(shop)}</p>
+                <p className="hint">
+                  {deliveryFeeLabel(delivery.fee)} · {deliveryRulesHint(shop)}
+                </p>
               ) : null}
               {delivery?.error ? <p className="form-error">{delivery.error}</p> : null}
             </>
@@ -677,7 +383,11 @@ export default function Checkout() {
               onChange={(event) => setCouponInput(cleanCouponCode(event.target.value))}
             />
           </label>
-          {coupon ? <p className="hint">Cupom {coupon.code}: {coupon.percent}% off</p> : null}
+          {coupon ? (
+            <p className="hint">
+              Cupom {coupon.code}: {coupon.percent}% off
+            </p>
+          ) : null}
           {cleanMinOrder(shop.minOrder) > 0 && total < cleanMinOrder(shop.minOrder) ? (
             <p className="form-error">Pedido mínimo: {money(cleanMinOrder(shop.minOrder))}</p>
           ) : null}
@@ -692,7 +402,7 @@ export default function Checkout() {
               (cleanMinOrder(shop.minOrder) > 0 && total < cleanMinOrder(shop.minOrder))
             }
           >
-            <span>{pending ? "Abrindo…" : "Continuar para pagar"}</span>
+            <span>{pending ? "Abrindo…" : "Pagar"}</span>
             <span>{money(payTotal)}</span>
           </button>
           {lines.map((line) => (

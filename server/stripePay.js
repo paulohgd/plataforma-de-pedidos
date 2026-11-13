@@ -18,6 +18,17 @@ export function stripePiId(value) {
   return /^pi_[A-Za-z0-9]+$/.test(id) ? id : "";
 }
 
+export function stripeCsId(value) {
+  const id = String(value || "").trim();
+  return /^cs_[A-Za-z0-9]+$/.test(id) ? id : "";
+}
+
+export function checkoutSessionPaid(session) {
+  const paymentStatus = String(session?.payment_status || "").toLowerCase();
+  const status = String(session?.status || "").toLowerCase();
+  return paymentStatus === "paid" || status === "complete";
+}
+
 export function stripePaymentPaid(intent) {
   const status = String(intent?.status || "").toLowerCase();
   return status === "succeeded";
@@ -102,7 +113,7 @@ export async function createPixIntent(secretKey, { amount, orderId, name, email,
   });
 }
 
-export async function createCardIntent(secretKey, { amount, orderId, email, name }) {
+export async function createCardIntent(secretKey, { amount, orderId, email }) {
   const stripe = stripeClient(secretKey);
   const cents = amountToCents(amount);
   if (cents < 50) throw new Error("Valor mínimo para pagamento é R$ 0,50.");
@@ -113,11 +124,74 @@ export async function createCardIntent(secretKey, { amount, orderId, email, name
     metadata: { order_id: String(orderId || "") },
     receipt_email: String(email || "").trim() || undefined,
     description: `Pedido ${String(orderId || "").slice(0, 8)}`,
-    shipping: name
-      ? {
-          name: String(name).slice(0, 120),
-        }
-      : undefined,
+  });
+}
+
+export async function createEmbeddedCheckout(
+  secretKey,
+  { orderId, shopId, slug, returnUrl, lines, email, discountCents = 0, discountLabel = "Desconto" },
+) {
+  const stripe = stripeClient(secretKey);
+  const lineItems = (lines || [])
+    .map((line) => {
+      const qty = Math.max(1, Number(line.qty) || 1);
+      const unit = amountToCents(line.unit != null ? line.unit : Number(line.total || 0) / qty);
+      if (unit < 1) return null;
+      const description = Array.isArray(line.options)
+        ? line.options.map((option) => option.name).filter(Boolean).join(", ").slice(0, 500)
+        : "";
+      return {
+        quantity: qty,
+        price_data: {
+          currency: "brl",
+          unit_amount: unit,
+          product_data: {
+            name: String(line.name || "Item").slice(0, 120),
+            description: description || undefined,
+          },
+        },
+      };
+    })
+    .filter(Boolean);
+  if (!lineItems.length) throw new Error("Pedido sem itens para cobrança.");
+
+  const metadata = {
+    order_id: String(orderId || ""),
+    shop_id: String(shopId || ""),
+    shop_slug: String(slug || ""),
+  };
+  const params = {
+    mode: "payment",
+    ui_mode: "embedded",
+    locale: "pt-BR",
+    customer_creation: "if_required",
+    return_url: returnUrl,
+    metadata,
+    line_items: lineItems,
+    payment_intent_data: { metadata },
+  };
+  const mail = String(email || "").trim();
+  if (mail) params.customer_email = mail;
+
+  const off = Math.max(0, Math.round(Number(discountCents) || 0));
+  if (off > 0) {
+    const coupon = await stripe.coupons.create({
+      amount_off: off,
+      currency: "brl",
+      duration: "once",
+      name: String(discountLabel || "Desconto").slice(0, 40),
+    });
+    params.discounts = [{ coupon: coupon.id }];
+  }
+
+  return stripe.checkout.sessions.create(params);
+}
+
+export async function retrieveCheckoutSession(secretKey, sessionId) {
+  const id = stripeCsId(sessionId);
+  if (!id) return null;
+  return stripeClient(secretKey).checkout.sessions.retrieve(id, {
+    expand: ["payment_intent", "payment_intent.latest_charge", "payment_intent.payment_method"],
   });
 }
 
