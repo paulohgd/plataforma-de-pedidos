@@ -805,7 +805,7 @@ async function payerAdditionalInfo(existing) {
   return info;
 }
 
-function mpPaymentBody(existing, payer, payment, place, { with3ds = false, additionalInfo = null } = {}) {
+function mpPaymentBody(existing, payer, payment, place, { with3ds = false, force3ds = false, additionalInfo = null } = {}) {
   const amount = orderAmount(existing);
   const { expiration_time: expirationTime, issuer_id: _issuerId, ...paymentMethod } = payment;
   const row = { amount, payment_method: paymentMethod };
@@ -815,9 +815,10 @@ function mpPaymentBody(existing, payer, payment, place, { with3ds = false, addit
   if (address && !payer.address) payer.address = address;
   const config = { location: { state_id: mpLocation(place?.uf) } };
   if (with3ds) {
+    // Crédito: força Challenge. Débito: só quando o risco pedir.
     config.online = {
       transaction_security: {
-        validation: "on_fraud_risk",
+        validation: force3ds ? "always" : "on_fraud_risk",
         liability_shift: "required",
       },
     };
@@ -835,6 +836,7 @@ function mpPaymentBody(existing, payer, payment, place, { with3ds = false, addit
       payments: [row],
     },
   };
+  if (with3ds) body.capture_mode = "automatic_async";
   if (additionalInfo) body.additional_info = additionalInfo;
   if (address && !pickup) body.shipment = { address };
   return body;
@@ -1050,23 +1052,38 @@ async function payCard(request, response) {
     const payer = payerFromOrder(existing, cardEmail, place);
     if (identification) payer.identification = identification;
     const additionalInfo = await payerAdditionalInfo(existing);
-    let created = await createMpOrder(
-      accessToken,
-      mpPaymentBody(
-        existing,
-        payer,
-        {
-          id: paymentMethodId,
-          type: paymentType === "debit_card" ? "debit_card" : "credit_card",
-          token,
-          installments,
-          statement_descriptor: "PEDIAQUI",
-        },
-        place,
-        { with3ds: true, additionalInfo },
-      ),
-      { deviceId },
-    );
+    const cardType = paymentType === "debit_card" ? "debit_card" : "credit_card";
+    const cardInstallments = Math.max(1, Math.min(12, Number(payload.installments) || installments || 1));
+    const paymentMethod = {
+      id: paymentMethodId,
+      type: cardType,
+      token,
+      installments: cardType === "debit_card" ? 1 : cardInstallments,
+      statement_descriptor: "PEDIAQUI",
+    };
+    async function createCardOrder(force3ds) {
+      return createMpOrder(
+        accessToken,
+        mpPaymentBody(existing, payer, paymentMethod, place, {
+          with3ds: true,
+          force3ds,
+          additionalInfo,
+        }),
+        { deviceId },
+      );
+    }
+    let created;
+    try {
+      created = await createCardOrder(cardType === "credit_card");
+    } catch (error) {
+      // Algumas contas ainda não aceitam validation=always; cai no modo recomendado.
+      if (cardType === "credit_card" && /transaction_security|validation|always|additionalProperties/i.test(error.message || "")) {
+        console.error("3DS always recusado, tentando on_fraud_risk:", error.message);
+        created = await createCardOrder(false);
+      } else {
+        throw error;
+      }
+    }
     created = await waitForMpOrder(accessToken, created);
     const latest = await loadOrderBySession(existing.id);
     if (latest?.status === "paid") {
@@ -1095,7 +1112,8 @@ async function payCard(request, response) {
       return;
     }
     const detail = firstPayment(created)?.status_detail || created?.status_detail || created?.status || "";
-    console.error("Cartão MP:", created?.status, detail);
+    const kind = firstPayment(created)?.payment_method?.type || paymentType;
+    console.error("Cartão MP:", created?.status, detail, kind, JSON.stringify(created?.config || {}).slice(0, 240));
     json(response, 400, {
       error: mpPublicError(detail, "O pagamento não foi aprovado. Confira os dados ou tente Pix."),
     });
@@ -1111,7 +1129,17 @@ async function payCard(request, response) {
       return;
     }
     const detail = firstPayment(failed)?.status_detail || failed?.status_detail || error.message;
-    console.error("Cartão:", error.message, detail, JSON.stringify(error.payload || {}).slice(0, 400));
+    const kind = firstPayment(failed)?.payment_method?.type || paymentType;
+    console.error(
+      "Cartão:",
+      error.message,
+      detail,
+      kind,
+      JSON.stringify({
+        config: failed?.config,
+        security: firstPayment(failed)?.payment_method?.transaction_security,
+      }).slice(0, 500),
+    );
     json(response, 400, {
       error: mpPublicError(detail, "Não foi possível processar o cartão agora. Tente de novo ou pague com Pix."),
     });

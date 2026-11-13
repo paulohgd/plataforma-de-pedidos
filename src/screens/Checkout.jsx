@@ -146,8 +146,15 @@ export default function Checkout() {
     if (customer.email) setCustomer({ email: "" });
   }, [customer.email]);
 
+  const brickEmail = validEmail(cardEmail) ? cardEmail.trim().toLowerCase() : "";
+
   useEffect(() => {
-    if (!paying || method !== "card" || pixAlive || !mpKey || !sessionId) return undefined;
+    if (!paying || method !== "card" || pixAlive || !mpKey || !sessionId || !brickEmail) {
+      brickRef.current?.unmount?.();
+      brickRef.current = null;
+      setCardReady(false);
+      return undefined;
+    }
     let canceled = false;
     setCardReady(false);
     (async () => {
@@ -161,12 +168,12 @@ export default function Checkout() {
       const controller = await bricks.create("cardPayment", "mp-card-brick", {
         initialization: {
           amount: payTotal,
-          payer: payerEmail ? { email: payerEmail } : undefined,
+          payer: { email: brickEmail },
         },
         customization: {
           paymentMethods: {
             minInstallments: 1,
-            maxInstallments: 1,
+            maxInstallments: 12,
           },
           visual: {
             hidePaymentButton: true,
@@ -202,7 +209,7 @@ export default function Checkout() {
       brickRef.current?.unmount?.();
       brickRef.current = null;
     };
-  }, [paying, method, pixAlive, mpKey, sessionId, payTotal, payerEmail]);
+  }, [paying, method, pixAlive, mpKey, sessionId, payTotal, brickEmail]);
 
   useEffect(() => {
     if (!challengeUrl || !sessionId) return undefined;
@@ -557,9 +564,9 @@ export default function Checkout() {
           token: formData.token,
           paymentMethodId: formData.payment_method_id,
           paymentTypeId: extra.paymentTypeId || formData.payment_type_id || "credit_card",
-          installments: 1,
+          installments: Number(formData.installments) || 1,
           identification: formData.payer?.identification,
-          email: cardEmail.trim(),
+          email: brickEmail || cardEmail.trim(),
           deviceId: extra.deviceId || extra.device_id || deviceId,
           place,
         }),
@@ -701,26 +708,31 @@ export default function Checkout() {
             )
           ) : null}
           {method === "card" && !pixAlive ? (
-            <label>
-              E-mail do cartão
-              <input
-                type="email"
-                autoComplete="email"
-                maxLength={120}
-                placeholder="seu@email.com"
-                value={cardEmail}
-                onChange={(event) => setCardEmail(event.target.value)}
-              />
-            </label>
+            <>
+              <label>
+                E-mail do cartão
+                <input
+                  type="email"
+                  autoComplete="email"
+                  maxLength={120}
+                  placeholder="seu@email.com"
+                  value={cardEmail}
+                  onChange={(event) => setCardEmail(event.target.value)}
+                />
+              </label>
+              {!brickEmail ? (
+                <p className="hint">Informe um e-mail real para liberar o cartão. No crédito o Mercado Pago usa isso na análise de segurança.</p>
+              ) : null}
+            </>
           ) : null}
-          {method === "card" && !pixAlive && !cardReady ? <p className="hint">Carregando o cartão…</p> : null}
-          <div id="mp-card-brick" className="pay-box" hidden={method !== "card" || pixAlive} />
+          {method === "card" && !pixAlive && brickEmail && !cardReady ? <p className="hint">Carregando o cartão…</p> : null}
+          <div id="mp-card-brick" className="pay-box" hidden={method !== "card" || pixAlive || !brickEmail} />
           {error ? <p className="form-error">{error}</p> : null}
           {pixAlive ? null : (
             <button
               type="button"
               className="primary"
-              disabled={confirming || (method === "card" && (!cardReady || !validEmail(cardEmail)))}
+              disabled={confirming || (method === "card" && (!cardReady || !brickEmail))}
               onClick={confirmPay}
             >
               <span>
