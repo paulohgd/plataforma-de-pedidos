@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 const API = "https://api.mercadopago.com";
-export const PIX_MS = 5 * 60 * 1000;
+export const PIX_MS = 30 * 60 * 1000;
 
 export function moneyAmount(value) {
   return Number(value || 0).toFixed(2);
@@ -139,11 +139,21 @@ export function paymentKindFromOrder(order) {
 
 export function pixFromOrder(order) {
   if (mpOrderPaid(order)) return { paid: true, pixCopy: "", expiresAt: 0 };
-  const method = firstPayment(order)?.payment_method || {};
+  const payment = firstPayment(order) || {};
+  const method = payment.payment_method || {};
   const copy = String(method.qr_code || "").trim();
+  const expiration =
+    Date.parse(payment.date_of_expiration || method.date_of_expiration || "") || 0;
   const created = Date.parse(order?.created_date || order?.date_created || "") || 0;
-  const expiresAt = created ? created + PIX_MS : 0;
+  const expiresAt = expiration || (created ? created + PIX_MS : 0);
   return { paid: false, pixCopy: copy, expiresAt };
+}
+
+export function mpOrderHasLivePix(order) {
+  if (!order || mpOrderPaid(order) || mpOrderClosed(order)) return false;
+  if (paymentKindFromOrder(order) !== "pix") return false;
+  const pix = pixFromOrder(order);
+  return Boolean(pix.pixCopy) && (!pix.expiresAt || pix.expiresAt > Date.now() - 15000);
 }
 
 export function mpPhone(whatsapp) {
@@ -274,8 +284,32 @@ export async function cancelMpOrder(accessToken, id) {
       idempotencyKey: randomUUID(),
     });
   } catch (error) {
-    if (error.status === 404 || /already|cancel|final/i.test(error.message || "")) return null;
+    if (error.status === 404 || /already.?cancel|already.?final/i.test(error.message || "")) return null;
     throw error;
+  }
+}
+
+export async function refundMpOrder(accessToken, id) {
+  return mpFetch(accessToken, {
+    method: "POST",
+    path: `/v1/orders/${encodeURIComponent(id)}/refund`,
+    idempotencyKey: randomUUID(),
+    body: {},
+  });
+}
+
+export async function dropMpOrder(accessToken, id) {
+  const orderId = String(id || "").trim();
+  if (!orderId) return null;
+  try {
+    return await cancelMpOrder(accessToken, orderId);
+  } catch (error) {
+    try {
+      return await refundMpOrder(accessToken, orderId);
+    } catch (refundError) {
+      console.error("Estorno Mercado Pago:", error.message, refundError.message);
+      return null;
+    }
   }
 }
 

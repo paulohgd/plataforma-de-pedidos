@@ -432,6 +432,10 @@ export default function Checkout() {
           goPaid();
           return;
         }
+        if (payload.pending) {
+          setCompleting(true);
+          return;
+        }
         if (!payload.pixCopy) {
           throw new Error(payload.error || "Não foi possível gerar o Pix. Tente de novo.");
         }
@@ -467,7 +471,12 @@ export default function Checkout() {
         }),
       });
       const payload = await response.json().catch(() => ({}));
+      if (payload.pixCopy) {
+        setPixCopy(payload.pixCopy);
+        if (payload.expiresAt) setPixExpiresAt(Number(payload.expiresAt));
+      }
       if (!response.ok) {
+        if (payload.pixCopy) setMethod("pix");
         throw new Error(payload.error || "Não foi possível pagar com cartão.");
       }
       if (payload.paid) {
@@ -573,6 +582,9 @@ export default function Checkout() {
             ) : (
               <p className="hint">Toque em Pagar para gerar o código Pix (copia e cola).</p>
             )
+          ) : null}
+          {method === "card" && pixAlive ? (
+            <p className="hint">O Pix continua aberto. Se o cartão não passar, você ainda pode pagar com o código gerado.</p>
           ) : null}
           {method === "card" && !cardReady ? <p className="hint">Carregando o cartão…</p> : null}
           <div id="mp-card-brick" className="pay-box" hidden={method !== "card"} />

@@ -13,8 +13,8 @@ import { sendShopDiscord } from "./discord.js";
 import { sendShopWhatsApp } from "./evolution.js";
 import { quoteDelivery } from "./freight.js";
 import {
-  cancelMpOrder,
   createMpOrder,
+  dropMpOrder,
   firstPayment,
   getMpOrder,
   searchMpOrderByRef,
@@ -22,6 +22,7 @@ import {
   mpAddress,
   mpItemsFromOrder,
   mpOrderClosed,
+  mpOrderHasLivePix,
   mpOrderInReview,
   mpOrderPaid,
   mpPublicError,
@@ -341,7 +342,12 @@ async function applyMpOrder(existing, mpOrder) {
   if (existing.status === "paid") return existing;
   if (!sameMpReference(existing, mpOrder)) return existing;
   if (mpOrderPaid(mpOrder)) return (await fulfill(existing.id, mpOrder)) || existing;
-  if (mpOrderClosed(mpOrder)) return (await markCanceled(existing.id, mpOrder)) || existing;
+  if (mpOrderClosed(mpOrder)) {
+    const currentId = mpOrderId(existing.stripe_session_id);
+    const closedId = mpOrderId(mpOrder.id);
+    if (currentId && closedId && currentId !== closedId) return existing;
+    return (await markCanceled(existing.id, mpOrder)) || existing;
+  }
   return existing;
 }
 
@@ -727,12 +733,15 @@ async function createPix(request, response) {
           json(response, 200, { paid: true, pixCopy: "", expiresAt: 0 });
           return;
         }
-        const current = pixFromOrder(previous);
-        if (current.pixCopy && current.expiresAt > Date.now()) {
-          json(response, 200, current);
+        if (mpOrderInReview(previous) && paymentKindFromOrder(previous) === "card") {
+          json(response, 200, { paid: false, pending: true, pixCopy: "", expiresAt: 0 });
           return;
         }
-        await cancelMpOrder(token, currentId).catch(() => {});
+        if (mpOrderHasLivePix(previous)) {
+          json(response, 200, pixFromOrder(previous));
+          return;
+        }
+        if (!mpOrderClosed(previous)) await dropMpOrder(token, currentId);
       }
     }
     const place = customerPlace(existing, payload);
@@ -764,6 +773,12 @@ async function createPix(request, response) {
     console.error("Pix:", error.message);
     json(response, 500, { error: mpPublicError(error, "Não foi possível gerar o Pix.") });
   }
+}
+
+function livePixPayload(order) {
+  if (!mpOrderHasLivePix(order)) return {};
+  const pix = pixFromOrder(order);
+  return { pixCopy: pix.pixCopy, expiresAt: pix.expiresAt };
 }
 
 async function payCard(request, response) {
@@ -799,23 +814,28 @@ async function payCard(request, response) {
     json(response, 503, { error: missingMpConfig(accessToken, true) });
     return;
   }
+  let openPix = null;
   try {
     const currentId = mpOrderId(existing.stripe_session_id);
     if (currentId) {
       let previous = await getMpOrder(accessToken, currentId).catch(() => null);
-      if (previous) previous = await waitForMpOrder(accessToken, previous);
+      if (previous && !mpOrderHasLivePix(previous) && !mpOrderPaid(previous) && !mpOrderClosed(previous)) {
+        previous = await waitForMpOrder(accessToken, previous);
+      }
       if (previous && mpOrderPaid(previous)) {
         await fulfill(existing.id, previous);
         json(response, 200, { paid: true });
         return;
       }
-      if (previous && mpOrderInReview(previous)) {
+      if (previous && (mpOrderInReview(previous) || (paymentKindFromOrder(previous) === "card" && !mpOrderClosed(previous)))) {
         await rememberMpOrder(existing.id, previous);
         json(response, 200, { paid: false, pending: true });
         return;
       }
-      if (previous && !mpOrderPaid(previous)) {
-        await cancelMpOrder(accessToken, currentId).catch(() => {});
+      if (mpOrderHasLivePix(previous)) {
+        openPix = previous;
+      } else if (previous && !mpOrderClosed(previous) && !mpOrderPaid(previous)) {
+        await dropMpOrder(accessToken, currentId);
       }
     }
     const identification = payload.identification && payload.identification.number
@@ -844,20 +864,29 @@ async function payCard(request, response) {
       { deviceId: String(payload.deviceId || "").trim() },
     );
     created = await waitForMpOrder(accessToken, created);
-    await rememberMpOrder(existing.id, created);
+    const latest = await loadOrderBySession(existing.id);
+    if (latest?.status === "paid") {
+      await dropMpOrder(accessToken, created?.id);
+      json(response, 200, { paid: true });
+      return;
+    }
     if (mpOrderPaid(created)) {
+      if (openPix?.id) await dropMpOrder(accessToken, openPix.id);
+      await rememberMpOrder(existing.id, created);
       await fulfill(existing.id, created);
       json(response, 200, { paid: true });
       return;
     }
     if (mpOrderInReview(created)) {
-      json(response, 200, { paid: false, pending: true });
+      if (!openPix) await rememberMpOrder(existing.id, created);
+      json(response, 200, { paid: false, pending: true, ...livePixPayload(openPix) });
       return;
     }
     const detail = firstPayment(created)?.status_detail || created?.status_detail || created?.status || "";
     console.error("Cartão MP:", created?.status, detail);
     json(response, 400, {
       error: mpPublicError(detail, "O pagamento não foi aprovado. Confira os dados ou tente Pix."),
+      ...livePixPayload(openPix),
     });
   } catch (error) {
     const failed = unwrapMpOrder(error.payload);
@@ -865,6 +894,7 @@ async function payCard(request, response) {
     console.error("Cartão:", error.message, detail, JSON.stringify(error.payload || {}).slice(0, 400));
     json(response, 400, {
       error: mpPublicError(detail, "Não foi possível processar o cartão agora. Tente de novo ou pague com Pix."),
+      ...livePixPayload(openPix),
     });
   }
 }
