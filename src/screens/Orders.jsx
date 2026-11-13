@@ -11,11 +11,10 @@ function shortPix(code) {
   return `${value.slice(0, 22)}…`;
 }
 
-function OrderCard({ order, now, onPay, onCopy, copiedId }) {
+function OrderCard({ order, now, onPay, onCopy, copiedId, onNewOrder }) {
   const status = myOrderStatus(order, now);
   const msLeft = Number(order.expiresAt || 0) - now;
-  const pixOpen = (status === "pending" || status === "awaiting") && order.payment === "pix" && Boolean(order.pixCopy);
-  const pixAlive = status === "pending" && order.payment === "pix" && msLeft > 0;
+  const pixAlive = status === "pending" && order.payment === "pix" && Boolean(order.pixCopy) && msLeft > 0;
   const items = Array.isArray(order.items) ? order.items.filter((item) => Number(item.qty) > 0) : [];
   return (
     <article className="my-order">
@@ -42,29 +41,29 @@ function OrderCard({ order, now, onPay, onCopy, copiedId }) {
               </button>
             </div>
           ) : null}
+          <p className="muted">Para pagar com cartão, inicie um novo pedido. Este Pix continua válido.</p>
         </>
       ) : null}
-      {status === "awaiting" ? (
-        <>
-          <p className="my-order-status">Aguardando confirmação do Pix. Se você já pagou, aguarde.</p>
-          {order.pixCopy ? (
-            <div className="my-order-pix">
-              <code>{shortPix(order.pixCopy)}</code>
-              <button type="button" className="linkish" onClick={() => onCopy(order)}>
-                {copiedId === order.id ? "Copiado" : "Copiar"}
-              </button>
-            </div>
-          ) : null}
-        </>
+      {status === "paid" ? (
+        <p className="my-order-status ok">Pago. Seu pedido já está sendo preparado.</p>
       ) : null}
-      {status === "paid" ? <p className="my-order-status ok">Pedido confirmado</p> : null}
       {order.paymentDuplicate ? (
         <p className="my-order-status">Atenção: outro pedido relacionado também foi pago. A loja vai conferir.</p>
       ) : null}
-      {status === "expired" ? <p className="my-order-status">Pix expirado. Faça um novo pedido para pagar.</p> : null}
+      {status === "expired" ? (
+        <>
+          <p className="my-order-status">Código Pix expirado.</p>
+          <p className="muted">Faça um novo pedido para gerar outro código e pagar.</p>
+          <div className="my-order-actions">
+            <button type="button" className="primary" onClick={onNewOrder}>
+              Fazer novo pedido
+            </button>
+          </div>
+        </>
+      ) : null}
       {status === "canceled" ? <p className="my-order-status">Pedido cancelado</p> : null}
-      {pixAlive ? (
-        <p className="muted">Para pagar com cartão, inicie um novo pedido. Este Pix continua válido.</p>
+      {status === "pending" && order.payment === "card" ? (
+        <p className="my-order-status">Aguardando pagamento no cartão.</p>
       ) : null}
       {items.length ? (
         <p className="muted">
@@ -74,10 +73,10 @@ function OrderCard({ order, now, onPay, onCopy, copiedId }) {
             .join(" · ")}
         </p>
       ) : null}
-      {pixOpen ? (
+      {pixAlive ? (
         <div className="my-order-actions">
           <button type="button" className="primary" onClick={() => onPay(order)}>
-            {status === "awaiting" ? "Ver pagamento" : "Pagar agora"}
+            Pagar agora
           </button>
         </div>
       ) : null}
@@ -111,7 +110,7 @@ export default function Orders() {
       for (const row of rows) {
         if (cancel) return;
         const status = myOrderStatus(row);
-        if (status !== "pending" && status !== "awaiting") continue;
+        if (status !== "pending") continue;
         await refreshMyOrder(slug, row.id);
       }
       if (!cancel) setOrders(readMyOrders(slug));
@@ -139,14 +138,8 @@ export default function Orders() {
     }
   }
 
-  const ongoing = orders.filter((row) => {
-    const status = myOrderStatus(row, now);
-    return status === "pending" || status === "awaiting";
-  });
-  const history = orders.filter((row) => {
-    const status = myOrderStatus(row, now);
-    return status !== "pending" && status !== "awaiting";
-  });
+  const ongoing = orders.filter((row) => myOrderStatus(row, now) === "pending");
+  const history = orders.filter((row) => myOrderStatus(row, now) !== "pending");
 
   return (
     <div className="orders-page">
@@ -176,6 +169,7 @@ export default function Orders() {
                   copiedId={copiedId}
                   onPay={(row) => openPixPay(row.id)}
                   onCopy={copyPix}
+                  onNewOrder={goHome}
                 />
               ))}
             </section>
@@ -184,7 +178,15 @@ export default function Orders() {
             <section>
               <h2 className="block-title">Histórico</h2>
               {history.map((order) => (
-                <OrderCard key={order.id} order={order} now={now} copiedId={copiedId} onPay={() => {}} onCopy={copyPix} />
+                <OrderCard
+                  key={order.id}
+                  order={order}
+                  now={now}
+                  copiedId={copiedId}
+                  onPay={() => {}}
+                  onCopy={copyPix}
+                  onNewOrder={goHome}
+                />
               ))}
             </section>
           ) : null}

@@ -64,8 +64,10 @@ export function formatPhone(value) {
 }
 
 export function checkoutEmail(phone, orderId = "") {
+  const orderKey = String(orderId || "").replace(/[^a-z0-9]/gi, "").slice(0, 32);
+  if (orderKey) return `pedido.${orderKey}@cliente.pediaqui.dev.br`;
   const digits = String(phone || "").replace(/\D/g, "");
-  const key = (digits.length >= 10 ? digits.slice(-11) : String(orderId || "").replace(/[^a-z0-9]/gi, "")).slice(0, 32);
+  const key = digits.length >= 10 ? digits.slice(-11) : "";
   return key ? `pedido.${key}@cliente.pediaqui.dev.br` : "";
 }
 

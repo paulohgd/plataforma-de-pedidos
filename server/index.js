@@ -989,7 +989,8 @@ async function payCard(request, response) {
     const created = await createCardIntent(secret, {
       amount: existing.total,
       orderId: existing.id,
-      email: cardEmail,
+      email: cardEmail || checkoutEmail(existing.customer_whatsapp, existing.id),
+      name: existing.customer_name,
     });
     await rememberIntent(existing.id, created);
     if (stripePaymentPaid(created)) {

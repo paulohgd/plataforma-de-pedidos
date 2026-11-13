@@ -58,17 +58,10 @@ export function upsertMyOrder(slug, patch = {}) {
 
 export function myOrderStatus(row, now = Date.now()) {
   if (row?.status === "paid" || row?.paid) return "paid";
-  if (row?.status === "canceled") {
-    const expiresAt = Number(row?.expiresAt || 0);
-    if (row?.payment === "pix" && expiresAt > 0 && expiresAt <= now) return "expired";
-    return "canceled";
-  }
-  if (row?.payment === "pix" && row?.pixCopy) {
-    const expiresAt = Number(row?.expiresAt || 0);
-    if (expiresAt > 0 && expiresAt <= now) return "awaiting";
-    return "pending";
-  }
-  if (row?.payment === "pix" && Number(row?.expiresAt || 0) > 0 && Number(row.expiresAt) <= now) return "expired";
+  const expiresAt = Number(row?.expiresAt || 0);
+  if (row?.payment === "pix" && expiresAt > 0 && expiresAt <= now) return "expired";
+  if (row?.status === "canceled") return "canceled";
+  if (row?.payment === "pix" && row?.pixCopy) return "pending";
   return row?.status || "pending";
 }
 

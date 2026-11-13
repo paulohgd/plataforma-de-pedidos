@@ -31,6 +31,7 @@ function stripePromiseFor(key) {
 function CardPayForm({ confirming, onError, onPaid, onPending, payerEmail = "", payerName = "", billingAddress = null }) {
   const stripe = useStripe();
   const elements = useElements();
+  const [elementReady, setElementReady] = useState(false);
   const billingName = String(payerName || "Cliente").trim().slice(0, 120) || "Cliente";
   const billingEmail = String(payerEmail || "").trim();
   const address = {
@@ -42,7 +43,7 @@ function CardPayForm({ confirming, onError, onPaid, onPending, payerEmail = "", 
   };
 
   async function pay() {
-    if (!stripe || !elements) throw new Error("Aguarde o cartão carregar.");
+    if (!stripe || !elements || !elementReady) throw new Error("Aguarde o cartão carregar.");
     const result = await stripe.confirmPayment({
       elements,
       redirect: "if_required",
@@ -73,11 +74,16 @@ function CardPayForm({ confirming, onError, onPaid, onPending, payerEmail = "", 
           wallets: { applePay: "auto", googlePay: "auto" },
           fields: { billingDetails: { email: "never", name: "never", phone: "never", address: "never" } },
         }}
+        onReady={() => setElementReady(true)}
         onLoadError={() => onError("Não foi possível abrir o cartão.")}
       />
-      <button type="button" className="primary" disabled={confirming || !stripe} onClick={() => pay().catch((err) => onError(err.message))}>
-        <span>{confirming ? "Processando…" : "Pagar"}</span>
-      </button>
+      {elementReady ? (
+        <button type="button" className="primary" disabled={confirming || !stripe} onClick={() => pay().catch((err) => onError(err.message))}>
+          <span>{confirming ? "Processando…" : "Pagar"}</span>
+        </button>
+      ) : (
+        <p className="hint">Carregando os dados do cartão…</p>
+      )}
     </div>
   );
 }

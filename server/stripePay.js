@@ -117,17 +117,32 @@ export async function createPixIntent(secretKey, { amount, orderId, name, email,
   });
 }
 
-export async function createCardIntent(secretKey, { amount, orderId, email }) {
+export async function createCardIntent(secretKey, { amount, orderId, email, name }) {
   const stripe = stripeClient(secretKey);
   const cents = amountToCents(amount);
   if (cents < 50) throw new Error("Valor mínimo para pagamento é R$ 0,50.");
+  const mail = String(email || "").trim();
+  const customerName = String(name || "Cliente").trim().slice(0, 120) || "Cliente";
+  const metadata = {
+    order_id: String(orderId || ""),
+    customer_name: customerName,
+  };
+  let customer;
+  if (mail) {
+    customer = await stripe.customers.create({
+      name: customerName,
+      email: mail,
+      metadata: { order_id: String(orderId || "") },
+    });
+  }
   return stripe.paymentIntents.create({
     amount: cents,
     currency: "brl",
     allowed_payment_method_types: ["card"],
-    metadata: { order_id: String(orderId || "") },
-    receipt_email: String(email || "").trim() || undefined,
+    customer: customer?.id || undefined,
+    receipt_email: mail || undefined,
     description: `Pedido ${String(orderId || "").slice(0, 8)}`,
+    metadata,
   });
 }
 
