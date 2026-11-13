@@ -491,7 +491,7 @@ export default function Checkout() {
             ) : pixCopy || pixExpiresAt ? (
               <p className="hint">Este código Pix expirou. Faça um novo pedido para pagar com Pix ou cartão.</p>
             ) : (
-              <p className="hint">Ao gerar o Pix, este pedido fica só no Pix. Cartão exige um novo pedido.</p>
+              <p className="hint">Se gerar o Pix, este pedido fica só no Pix. Antes disso, você ainda pode tentar o cartão.</p>
             )
           ) : null}
           {method === "card" && !pixAlive ? (

@@ -97,7 +97,7 @@ export async function createPixIntent(secretKey, { amount, orderId, name, email,
   return stripe.paymentIntents.create({
     amount: cents,
     currency: "brl",
-    payment_method_types: ["pix"],
+    allowed_payment_method_types: ["pix"],
     payment_method_data: {
       type: "pix",
       billing_details: {
@@ -120,7 +120,7 @@ export async function createCardIntent(secretKey, { amount, orderId, email }) {
   return stripe.paymentIntents.create({
     amount: cents,
     currency: "brl",
-    payment_method_types: ["card"],
+    allowed_payment_method_types: ["card"],
     metadata: { order_id: String(orderId || "") },
     receipt_email: String(email || "").trim() || undefined,
     description: `Pedido ${String(orderId || "").slice(0, 8)}`,

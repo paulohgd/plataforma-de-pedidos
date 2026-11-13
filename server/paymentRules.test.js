@@ -8,10 +8,8 @@ test("não converte Pix em cartão na mesma tentativa", () => {
   assert.match(result.error, /novo pedido/i);
 });
 
-test("não converte cartão em Pix na mesma tentativa", () => {
-  const result = canLockPaymentMethod("card", "pix");
-  assert.equal(result.ok, false);
-  assert.match(result.error, /novo pedido/i);
+test("permite converter cartão em Pix na mesma tentativa", () => {
+  assert.deepEqual(canLockPaymentMethod("card", "pix"), { ok: true, method: "pix" });
 });
 
 test("permite travar o método na primeira tentativa", () => {

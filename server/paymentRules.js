@@ -10,12 +10,12 @@ export function canLockPaymentMethod(current, next) {
   if (!to) return { ok: false, error: "Informe o método de pagamento." };
   if (!from) return { ok: true, method: to };
   if (from === to) return { ok: true, method: to };
+  // Cartão → Pix: liberado no mesmo pedido (cancela o intent de cartão).
+  if (from === "card" && to === "pix") return { ok: true, method: to };
+  // Pix → cartão: exige novo pedido, porque o código Pix já foi gerado.
   return {
     ok: false,
-    error:
-      from === "pix"
-        ? "Este pedido já está no Pix. Para pagar com cartão, inicie um novo pedido."
-        : "Este pedido já está no cartão. Para pagar com Pix, inicie um novo pedido.",
+    error: "Este pedido já está no Pix. Para pagar com cartão, inicie um novo pedido.",
   };
 }
 

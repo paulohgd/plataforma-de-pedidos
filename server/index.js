@@ -867,10 +867,13 @@ async function createPix(request, response) {
           json(response, 200, { paid: true, pixCopy: "", expiresAt: 0 });
           return;
         }
-        const live = pixFromIntent(previous);
-        if (live.pixCopy && !stripePaymentClosed(previous)) {
-          json(response, 200, { ...live, payment: "pix" });
-          return;
+        const kind = paymentKindFromIntent(previous);
+        if (kind === "pix") {
+          const live = pixFromIntent(previous);
+          if (live.pixCopy && !stripePaymentClosed(previous)) {
+            json(response, 200, { ...live, payment: "pix" });
+            return;
+          }
         }
         if (!stripePaymentClosed(previous) && !stripePaymentPaid(previous)) {
           await cancelIntent(secret, currentId).catch(() => null);
