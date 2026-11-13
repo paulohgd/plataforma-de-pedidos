@@ -29,7 +29,6 @@ import {
   unwrapMpOrder,
   payerFromOrder,
   paymentKindFromOrder,
-  mpPixExpiresAt,
   pixFromOrder,
   waitForMpOrder,
 } from "./mercadopago.js";
@@ -440,17 +439,7 @@ async function settleOrder(existing) {
     }
   }
   if (!mpOrder) return existing;
-  mpOrder = await closePixAfterOffer(token, mpOrder);
   return applyMpOrder(existing, mpOrder);
-}
-
-async function closePixAfterOffer(token, mpOrder) {
-  if (!token || !mpOrder || mpOrderPaid(mpOrder) || mpOrderClosed(mpOrder)) return mpOrder;
-  if (paymentKindFromOrder(mpOrder) !== "pix") return mpOrder;
-  const expiresAt = mpPixExpiresAt(mpOrder);
-  if (!expiresAt || expiresAt > Date.now()) return mpOrder;
-  await dropMpOrder(token, mpOrder.id);
-  return (await getMpOrder(token, mpOrder.id).catch(() => null)) || mpOrder;
 }
 
 async function loadOrderBySession(sessionId) {
@@ -867,8 +856,12 @@ async function createPix(request, response) {
           json(response, 200, pixFromOrder(previous));
           return;
         }
+        if (!mpOrderClosed(previous) && paymentKindFromOrder(previous) === "pix") {
+          // Mantém o Pix no Mercado Pago (PT30M). A tela só corta a oferta em 5 min.
+          json(response, 200, pixFromOrder(previous));
+          return;
+        }
         if (!mpOrderClosed(previous)) {
-          // Só cancela a Order deste mesmo pedido (ex.: Pix da oferta de 5 min). Pedidos relacionados ficam intactos.
           await dropMpOrder(token, currentId);
         }
       }

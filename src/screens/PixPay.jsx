@@ -17,15 +17,17 @@ export default function PixPay() {
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [canceled, setCanceled] = useState(false);
   const leaving = useRef(false);
   const msLeft = expiresAt ? expiresAt - now : 0;
-  const alive = Boolean(pixCopy) && msLeft > 0;
+  const offerAlive = Boolean(pixCopy) && msLeft > 0;
+  const waitingConfirm = Boolean(pixCopy) && !offerAlive && !canceled;
 
   function goPaid() {
     if (leaving.current) return;
     leaving.current = true;
     rememberCheckoutSession(slug, sessionId);
-    upsertMyOrder(slug, { id: sessionId, status: "paid", payment: "pix" });
+    upsertMyOrder(slug, { id: sessionId, status: "paid", paid: true, payment: "pix", expiresAt: 0, pixCopy: "" });
     openPaid(sessionId);
   }
 
@@ -56,8 +58,15 @@ export default function PixPay() {
           goPaid();
           return;
         }
+        if (payload.canceled) {
+          setCanceled(true);
+          await refreshMyOrder(slug, sessionId);
+          setLoading(false);
+          return;
+        }
         if (payload.pixCopy) setPixCopy(payload.pixCopy);
         if (payload.expiresAt) setExpiresAt(Number(payload.expiresAt) || 0);
+        setCanceled(false);
         await refreshMyOrder(slug, sessionId);
         setError("");
         setLoading(false);
@@ -66,7 +75,7 @@ export default function PixPay() {
       }
     }
     tick();
-    const timer = setInterval(tick, 2500);
+    const timer = setInterval(tick, 2000);
     return () => {
       cancel = true;
       clearInterval(timer);
@@ -100,36 +109,48 @@ export default function PixPay() {
         </div>
       ) : (
         <div className="pix-pay">
-          <h2>Pedido aguardando pagamento</h2>
-          <p className="hint">Copie o código e pague com Pix copia e cola no aplicativo do banco.</p>
-          {alive ? (
+          <h2>{waitingConfirm ? "Confirmando o pagamento" : "Pedido aguardando pagamento"}</h2>
+          <p className="hint">
+            {waitingConfirm
+              ? "Se você já pagou no banco, aguarde a confirmação. Não feche esta tela."
+              : "Copie o código e pague com Pix copia e cola no aplicativo do banco."}
+          </p>
+          {pixCopy && !canceled ? (
             <>
               <textarea readOnly value={pixCopy} />
-              <p className={msLeft <= 60000 ? "pix-timer ending" : "pix-timer"}>
-                O tempo para você pagar acaba em {formatCountdown(msLeft)}
-              </p>
+              {offerAlive ? (
+                <p className={msLeft <= 60000 ? "pix-timer ending" : "pix-timer"}>
+                  O tempo para você pagar acaba em {formatCountdown(msLeft)}
+                </p>
+              ) : (
+                <p className="hint">O tempo da oferta acabou, mas se o Pix já foi pago estamos confirmando.</p>
+              )}
               {error ? <p className="form-error">{error}</p> : null}
               <button type="button" className="primary" onClick={copyPix}>
                 {copied ? "Código copiado" : "Copiar código"}
               </button>
-              <p className="hint">
-                Você já iniciou um pagamento via Pix. Para pagar com cartão, será necessário iniciar um novo pedido. O Pix
-                anterior continua válido até expirar.
-              </p>
-              <button
-                type="button"
-                className="ghost"
-                onClick={() => {
-                  rememberParentOrder(slug, sessionId);
-                  openBag();
-                }}
-              >
-                Iniciar novo pedido com cartão
-              </button>
+              {offerAlive ? (
+                <>
+                  <p className="hint">
+                    Você já iniciou um pagamento via Pix. Para pagar com cartão, será necessário iniciar um novo pedido. O
+                    Pix anterior continua válido até o Mercado Pago encerrar.
+                  </p>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => {
+                      rememberParentOrder(slug, sessionId);
+                      openBag();
+                    }}
+                  >
+                    Iniciar novo pedido com cartão
+                  </button>
+                </>
+              ) : null}
             </>
           ) : (
             <>
-              <p className="form-error">Este Pix expirou. Faça um novo pedido para pagar com Pix ou cartão.</p>
+              <p className="form-error">Este Pix expirou ou foi cancelado. Faça um novo pedido para pagar.</p>
               <button type="button" className="primary" onClick={goHome}>
                 Fazer novo pedido
               </button>

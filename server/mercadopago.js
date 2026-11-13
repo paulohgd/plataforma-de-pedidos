@@ -153,8 +153,7 @@ export function pixFromOrder(order) {
 export function mpOrderHasLivePix(order) {
   if (!order || mpOrderPaid(order) || mpOrderClosed(order)) return false;
   if (paymentKindFromOrder(order) !== "pix") return false;
-  const pix = pixFromOrder(order);
-  return Boolean(pix.pixCopy) && (!pix.expiresAt || pix.expiresAt > Date.now() - 15000);
+  return Boolean(pixFromOrder(order).pixCopy);
 }
 
 export function mpPhone(whatsapp) {
