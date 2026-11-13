@@ -4,7 +4,7 @@ import WebSocket from "ws";
 import { createClient } from "@supabase/supabase-js";
 import { paidMessage, paidTitle } from "../src/config.js";
 import { cleanCouponCode, couponDiscount, findCoupon } from "../src/coupons.js";
-import { checkoutEmail, fullPhone, validPhone } from "../src/format.js";
+import { checkoutEmail, fullPhone, payerEmail, validPhone } from "../src/format.js";
 import { formatKm } from "../src/freight.js";
 import { asMpKey, isMpCredential, isMpTestKey } from "../src/mp.js";
 import { buildOrderText, whatsappOrderUrl } from "../src/order.js";
@@ -20,10 +20,12 @@ import {
   searchMpOrderByRef,
   moneyAmount,
   mpAddress,
+  mpChallengeUrl,
   mpItemsFromOrder,
   mpOrderClosed,
   mpOrderHasLivePix,
   mpOrderInReview,
+  mpOrderNeedsChallenge,
   mpOrderPaid,
   mpPublicError,
   unwrapMpOrder,
@@ -777,13 +779,49 @@ function orderPayerEmail(order) {
   return checkoutEmail(order?.customer_whatsapp, order?.id);
 }
 
-function mpPaymentBody(existing, payer, payment, place) {
+async function payerAdditionalInfo(existing) {
+  const info = {
+    "payer.authentication_type": "WEB",
+    "payer.is_prime_user": false,
+    "payer.is_first_purchase_online": true,
+  };
+  const pickup = existing.customer_mode !== "entrega";
+  info["shipment.express"] = false;
+  info["shipment.local_pickup"] = pickup;
+  if (!supabase || !existing?.shop_id || !existing?.customer_whatsapp) return info;
+  const { data: rows } = await supabase
+    .from("orders")
+    .select("paid_at, created_at")
+    .eq("shop_id", existing.shop_id)
+    .eq("customer_whatsapp", existing.customer_whatsapp)
+    .eq("status", "paid")
+    .order("created_at", { ascending: false })
+    .limit(1);
+  const previous = Array.isArray(rows) ? rows[0] : null;
+  if (!previous) return info;
+  info["payer.is_first_purchase_online"] = false;
+  const last = previous.paid_at || previous.created_at;
+  if (last) info["payer.last_purchase"] = last;
+  return info;
+}
+
+function mpPaymentBody(existing, payer, payment, place, { with3ds = false, additionalInfo = null } = {}) {
   const amount = orderAmount(existing);
   const { expiration_time: expirationTime, issuer_id: _issuerId, ...paymentMethod } = payment;
   const row = { amount, payment_method: paymentMethod };
   if (expirationTime) row.expiration_time = expirationTime;
   const pickup = existing.customer_mode !== "entrega";
   const address = mpAddress(place);
+  if (address && !payer.address) payer.address = address;
+  const config = { location: { state_id: mpLocation(place?.uf) } };
+  if (with3ds) {
+    config.online = {
+      transaction_security: {
+        validation: "on_fraud_risk",
+        liability_shift: "required",
+      },
+    };
+  }
   const body = {
     type: "online",
     processing_mode: "automatic",
@@ -792,11 +830,12 @@ function mpPaymentBody(existing, payer, payment, place) {
     description: String(existing.items?.[0]?.name || "Pedido").slice(0, 150),
     payer,
     items: mpItemsFromOrder(existing),
-    config: { location: { state_id: mpLocation(place?.uf) } },
+    config,
     transactions: {
       payments: [row],
     },
   };
+  if (additionalInfo) body.additional_info = additionalInfo;
   if (address && !pickup) body.shipment = { address };
   return body;
 }
@@ -939,8 +978,18 @@ async function payCard(request, response) {
   const paymentMethodId = String(payload.paymentMethodId || "").trim().toLowerCase();
   const paymentType = String(payload.paymentTypeId || "credit_card").trim().toLowerCase();
   const installments = 1;
+  const deviceId = String(payload.deviceId || "").trim();
+  const cardEmail = payerEmail(payload.email);
   if (!token || !paymentMethodId) {
     json(response, 400, { error: "Informe os dados do cartão." });
+    return;
+  }
+  if (!cardEmail) {
+    json(response, 400, { error: "Informe um e-mail válido para pagar com cartão." });
+    return;
+  }
+  if (!deviceId) {
+    json(response, 400, { error: "Não foi possível validar este dispositivo. Atualize a página e tente de novo." });
     return;
   }
   const accessToken = await accessTokenForShop(existing.shop_id);
@@ -963,6 +1012,15 @@ async function payCard(request, response) {
       if (previous && mpOrderPaid(previous)) {
         await fulfill(existing.id, previous);
         json(response, 200, { paid: true });
+        return;
+      }
+      if (previous && mpOrderNeedsChallenge(previous)) {
+        await rememberMpOrder(existing.id, previous);
+        json(response, 200, {
+          paid: false,
+          pending: true,
+          challengeUrl: mpChallengeUrl(previous),
+        });
         return;
       }
       if (previous && (mpOrderInReview(previous) || (paymentKindFromOrder(previous) === "card" && !mpOrderClosed(previous)))) {
@@ -989,8 +1047,9 @@ async function payCard(request, response) {
         }
       : null;
     const place = customerPlace(existing, payload);
-    const payer = payerFromOrder(existing, orderPayerEmail(existing), place);
+    const payer = payerFromOrder(existing, cardEmail, place);
     if (identification) payer.identification = identification;
+    const additionalInfo = await payerAdditionalInfo(existing);
     let created = await createMpOrder(
       accessToken,
       mpPaymentBody(
@@ -1004,8 +1063,9 @@ async function payCard(request, response) {
           statement_descriptor: "PEDIAQUI",
         },
         place,
+        { with3ds: true, additionalInfo },
       ),
-      { deviceId: String(payload.deviceId || "").trim() },
+      { deviceId },
     );
     created = await waitForMpOrder(accessToken, created);
     const latest = await loadOrderBySession(existing.id);
@@ -1020,6 +1080,15 @@ async function payCard(request, response) {
       json(response, 200, { paid: true });
       return;
     }
+    if (mpOrderNeedsChallenge(created)) {
+      await rememberMpOrder(existing.id, created);
+      json(response, 200, {
+        paid: false,
+        pending: true,
+        challengeUrl: mpChallengeUrl(created),
+      });
+      return;
+    }
     if (mpOrderInReview(created)) {
       await rememberMpOrder(existing.id, created);
       json(response, 200, { paid: false, pending: true });
@@ -1032,6 +1101,15 @@ async function payCard(request, response) {
     });
   } catch (error) {
     const failed = unwrapMpOrder(error.payload);
+    if (mpOrderNeedsChallenge(failed)) {
+      await rememberMpOrder(existing.id, failed).catch(() => {});
+      json(response, 200, {
+        paid: false,
+        pending: true,
+        challengeUrl: mpChallengeUrl(failed),
+      });
+      return;
+    }
     const detail = firstPayment(failed)?.status_detail || failed?.status_detail || error.message;
     console.error("Cartão:", error.message, detail, JSON.stringify(error.payload || {}).slice(0, 400));
     json(response, 400, {

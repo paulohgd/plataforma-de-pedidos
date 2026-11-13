@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { loadMercadoPago } from "@mercadopago/sdk-js";
 import { useCatalog } from "../catalog";
 import { cepDigits, composeAddress, formatCep, lookupCep } from "../cep";
-import { formatCountdown, formatPhone, money, phoneDigits, validPhone } from "../format";
+import { formatCountdown, formatPhone, money, phoneDigits, validEmail, validPhone } from "../format";
 import { cleanCouponCode, couponDiscount, findCoupon } from "../coupons";
 import { cleanMinOrder, deliveryFeeLabel, deliveryRulesHint } from "../freight";
 import { useCart } from "../cart";
@@ -26,10 +26,10 @@ function ensureMpSdk() {
 }
 
 async function readDeviceId() {
-  for (let attempt = 0; attempt < 25; attempt += 1) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
     const id = String(window.MP_DEVICE_SESSION_ID || document.querySelector("#deviceId")?.value || "").trim();
     if (id) return id;
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    await new Promise((resolve) => setTimeout(resolve, 150));
   }
   return "";
 }
@@ -49,6 +49,8 @@ export default function Checkout() {
   const [copied, setCopied] = useState(false);
   const [sessionId, setSessionId] = useState("");
   const [payerEmail, setPayerEmail] = useState("");
+  const [cardEmail, setCardEmail] = useState("");
+  const [challengeUrl, setChallengeUrl] = useState("");
   const [publicKey, setPublicKey] = useState("");
   const [cardReady, setCardReady] = useState(false);
   const [completing, setCompleting] = useState(false);
@@ -201,6 +203,45 @@ export default function Checkout() {
       brickRef.current = null;
     };
   }, [paying, method, pixAlive, mpKey, sessionId, payTotal, payerEmail]);
+
+  useEffect(() => {
+    if (!challengeUrl || !sessionId) return undefined;
+    let cancel = false;
+    let attempts = 0;
+    async function tick() {
+      if (cancel) return;
+      attempts += 1;
+      const { ok, payload } = await fetchCheckoutSession(sessionId);
+      if (cancel) return;
+      if (ok && payload.paid) {
+        setChallengeUrl("");
+        goPaid(sessionId);
+        return;
+      }
+      if (ok && payload.canceled) {
+        setChallengeUrl("");
+        setCompleting(false);
+        setError("A autenticação do cartão não foi concluída. Tente de novo ou pague com Pix.");
+        return;
+      }
+      if (attempts >= 90) {
+        setChallengeUrl("");
+        setCompleting(false);
+        setError("Não foi possível confirmar a autenticação do cartão. Tente de novo ou pague com Pix.");
+      }
+    }
+    function onMessage(event) {
+      if (event?.data?.status === "COMPLETE") tick();
+    }
+    window.addEventListener("message", onMessage);
+    tick();
+    const timer = setInterval(tick, 2000);
+    return () => {
+      cancel = true;
+      clearInterval(timer);
+      window.removeEventListener("message", onMessage);
+    };
+  }, [challengeUrl, sessionId]);
 
   useEffect(() => {
     if (customer.mode !== "entrega") {
@@ -490,6 +531,12 @@ export default function Checkout() {
         goPix(payload.pixCopy, payload.expiresAt);
         return;
       }
+      if (!validEmail(cardEmail)) {
+        throw new Error("Informe um e-mail válido para pagar com cartão.");
+      }
+      if (!deviceId) {
+        throw new Error("Não foi possível validar este dispositivo. Atualize a página e tente de novo.");
+      }
       const brick = brickRef.current;
       if (!brick?.getFormData) throw new Error("Aguarde o cartão carregar.");
       let formData;
@@ -512,7 +559,7 @@ export default function Checkout() {
           paymentTypeId: extra.paymentTypeId || formData.payment_type_id || "credit_card",
           installments: 1,
           identification: formData.payer?.identification,
-          email: payerEmail,
+          email: cardEmail.trim(),
           deviceId: extra.deviceId || extra.device_id || deviceId,
           place,
         }),
@@ -531,6 +578,11 @@ export default function Checkout() {
       }
       if (payload.paid) {
         goPaid();
+        return;
+      }
+      if (payload.challengeUrl) {
+        setChallengeUrl(String(payload.challengeUrl));
+        setCompleting(true);
         return;
       }
       if (payload.pending) {
@@ -561,7 +613,16 @@ export default function Checkout() {
     <div className="checkout-page">
       <PageHead title={paying ? "Pagamento" : "Seus dados"} />
       <input id="deviceId" type="hidden" readOnly tabIndex={-1} aria-hidden="true" />
-      {busy ? (
+      {challengeUrl ? (
+        <div className="card-challenge" role="dialog" aria-modal="true" aria-label="Autenticação do cartão">
+          <div className="card-challenge-panel">
+            <h2>Confirme no banco</h2>
+            <p className="hint">Seu banco pediu uma autenticação extra. Conclua na janela abaixo sem fechar esta tela.</p>
+            <iframe title="Autenticação 3DS" src={challengeUrl} className="card-challenge-frame" allow="payment *" />
+          </div>
+        </div>
+      ) : null}
+      {busy && !challengeUrl ? (
         <div className="pay-loading" role="status" aria-live="polite">
           <span className="pay-spinner" aria-hidden="true" />
           <h2>
@@ -639,11 +700,29 @@ export default function Checkout() {
               <p className="hint">Ao gerar o Pix, este pedido fica só no Pix. Cartão exige um novo pedido.</p>
             )
           ) : null}
+          {method === "card" && !pixAlive ? (
+            <label>
+              E-mail do cartão
+              <input
+                type="email"
+                autoComplete="email"
+                maxLength={120}
+                placeholder="seu@email.com"
+                value={cardEmail}
+                onChange={(event) => setCardEmail(event.target.value)}
+              />
+            </label>
+          ) : null}
           {method === "card" && !pixAlive && !cardReady ? <p className="hint">Carregando o cartão…</p> : null}
           <div id="mp-card-brick" className="pay-box" hidden={method !== "card" || pixAlive} />
           {error ? <p className="form-error">{error}</p> : null}
           {pixAlive ? null : (
-            <button type="button" className="primary" disabled={confirming || (method === "card" && !cardReady)} onClick={confirmPay}>
+            <button
+              type="button"
+              className="primary"
+              disabled={confirming || (method === "card" && (!cardReady || !validEmail(cardEmail)))}
+              onClick={confirmPay}
+            >
               <span>
                 {confirming ? "Gerando…" : method === "pix" && pixCopy && !pixAlive ? "Gerar novo código Pix" : "Pagar"}
               </span>

@@ -78,6 +78,19 @@ export function mpOrderInReview(order) {
   return [order.status, order.status_detail, payment?.status, payment?.status_detail].some(reviewStatus);
 }
 
+export function mpChallengeUrl(order) {
+  const payment = firstPayment(order) || {};
+  return String(payment.payment_method?.transaction_security?.url || "").trim();
+}
+
+export function mpOrderNeedsChallenge(order) {
+  if (!order || mpOrderPaid(order) || mpOrderClosed(order)) return false;
+  const payment = firstPayment(order);
+  const details = [order.status_detail, payment?.status_detail].map((value) => String(value || "").toLowerCase());
+  if (details.includes("pending_challenge")) return true;
+  return Boolean(mpChallengeUrl(order));
+}
+
 export function unwrapMpOrder(payload) {
   if (!payload || typeof payload !== "object") return payload;
   const inner = payload.data && typeof payload.data === "object" ? payload.data : payload;
@@ -86,13 +99,26 @@ export function unwrapMpOrder(payload) {
 
 export function mpItemsFromOrder(order) {
   const amount = moneyAmount(order?.total);
-  const fallback = [{ title: "Pedido", quantity: 1, unit_price: amount }];
+  const fallback = [
+    {
+      external_code: "pedido",
+      title: "Pedido",
+      description: "Pedido",
+      category_id: "food",
+      quantity: 1,
+      unit_price: amount,
+    },
+  ];
   const lines = (order?.items || []).filter((line) => Number(line.total) > 0 && String(line.name || "").trim());
   if (!lines.length) return fallback;
-  const items = lines.map((line) => {
+  const items = lines.map((line, index) => {
     const quantity = Math.max(1, Number(line.qty) || 1);
+    const title = String(line.name).slice(0, 150);
     return {
-      title: String(line.name).slice(0, 150),
+      external_code: String(line.id || line.productId || index + 1).slice(0, 50),
+      title,
+      description: title,
+      category_id: "food",
       quantity,
       unit_price: moneyAmount(Number(line.total) / quantity),
     };
@@ -113,6 +139,8 @@ export function mpAddress(place = {}) {
   if (number) address.street_number = number;
   if (place.city) address.city = String(place.city).slice(0, 80);
   if (place.uf) address.state = String(place.uf).trim().slice(0, 2).toUpperCase();
+  if (place.neighborhood) address.neighborhood = String(place.neighborhood).slice(0, 80);
+  if (place.complement) address.complement = String(place.complement).slice(0, 80);
   return address;
 }
 
@@ -121,6 +149,7 @@ export async function waitForMpOrder(accessToken, order, { wantPix = false } = {
   if (!current?.id) return current;
   for (let attempt = 0; attempt < 10; attempt += 1) {
     if (mpOrderPaid(current) || mpOrderClosed(current)) return current;
+    if (mpOrderNeedsChallenge(current)) return current;
     if (wantPix && pixFromOrder(current).pixCopy) return current;
     if (attempt === 9) return current;
     await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -196,8 +225,11 @@ export function mpPublicError(error, fallback = "Não foi possível concluir o p
   if (/cc_rejected_card_disabled|card_disabled/i.test(message)) {
     return "Este cartão está desativado. Tente outro cartão ou Pix.";
   }
+  if (/cc_rejected_3ds_challenge|3ds.?challenge/i.test(message)) {
+    return "A autenticação do cartão não foi concluída. Tente de novo ou pague com Pix.";
+  }
   if (/cc_rejected_high_risk|high.?risk/i.test(message)) {
-    return "O Mercado Pago recusou este cartão na análise de segurança. O Pix continua valendo em Pedidos. Tente outro cartão.";
+    return "O Mercado Pago recusou este cartão na análise de segurança. Tente outro cartão ou pague com Pix.";
   }
   if (/cc_rejected_max_attempts|max_attempts/i.test(message)) {
     return "Muitas tentativas neste cartão. Use Pix ou outro cartão.";
