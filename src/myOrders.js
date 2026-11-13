@@ -39,8 +39,10 @@ export function upsertMyOrder(slug, patch = {}) {
 
 export function myOrderStatus(row, now = Date.now()) {
   if (row?.status === "paid" || row?.paid) return "paid";
+  const expiresAt = Number(row?.expiresAt || 0);
+  if (row?.status === "canceled" && row?.payment === "pix" && expiresAt > 0 && expiresAt <= now) return "expired";
   if (row?.status === "canceled") return "canceled";
-  if (row?.payment === "pix" && Number(row.expiresAt || 0) > 0 && Number(row.expiresAt) <= now) return "expired";
+  if (row?.payment === "pix" && expiresAt > 0 && expiresAt <= now) return "expired";
   return row?.status || "pending";
 }
 

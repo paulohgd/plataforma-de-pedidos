@@ -63,14 +63,20 @@ export function formatPhone(value) {
   return `(${ddd}) ${rest.slice(0, 5)}-${rest.slice(5, 9)}`;
 }
 
-export function checkoutEmail(orderId) {
-  const id = String(orderId || "").replace(/[^a-z0-9]/gi, "").slice(0, 32);
-  return id ? `pedido.${id}@cliente.pediaqui.dev.br` : "";
+export function checkoutEmail(phone, orderId = "") {
+  const digits = String(phone || "").replace(/\D/g, "");
+  const key = (digits.length >= 10 ? digits.slice(-11) : String(orderId || "").replace(/[^a-z0-9]/gi, "")).slice(0, 32);
+  return key ? `pedido.${key}@pediaqui.dev.br` : "";
 }
 
 export function validEmail(value) {
   const email = String(value || "").trim();
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 120 && !/@cliente\.pediaqui\.dev\.br$/i.test(email);
+  return (
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) &&
+    email.length <= 120 &&
+    !/@cliente\.pediaqui\.dev\.br$/i.test(email) &&
+    !/^pedido\.[0-9a-z]+@pediaqui\.dev\.br$/i.test(email)
+  );
 }
 
 export function payerEmail(value, fallback = "") {

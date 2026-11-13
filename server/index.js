@@ -567,7 +567,7 @@ async function createCheckout(request, response) {
   json(response, 200, {
     sessionId: order.id,
     publicKey,
-    payerEmail: email || checkoutEmail(order.id),
+    payerEmail: email || checkoutEmail(whatsapp, order.id),
   });
 }
 
@@ -688,7 +688,7 @@ function orderPayerEmail(order, payload = {}) {
   return (
     payerEmail(payload.email) ||
     payerEmail(order?.customer_email) ||
-    checkoutEmail(order?.id)
+    checkoutEmail(order?.customer_whatsapp, order?.id)
   );
 }
 
@@ -772,7 +772,7 @@ async function createPix(request, response) {
     if (isMpTestMode(publicKey, token)) payer.first_name = "APRO";
     let created = await createMpOrder(
       token,
-      mpPaymentBody(existing, payer, { id: "pix", type: "bank_transfer", expiration_time: "PT5M" }, place),
+      mpPaymentBody(existing, payer, { id: "pix", type: "bank_transfer", expiration_time: "PT30M" }, place),
       { deviceId: String(payload.deviceId || "").trim() },
     );
     created = await waitForMpOrder(token, created, { wantPix: true });

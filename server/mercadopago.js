@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 const API = "https://api.mercadopago.com";
-export const PIX_MS = 5 * 60 * 1000;
+export const PIX_MS = 30 * 60 * 1000;
 
 export function moneyAmount(value) {
   return Number(value || 0).toFixed(2);
@@ -142,8 +142,9 @@ export function pixFromOrder(order) {
   const payment = firstPayment(order) || {};
   const method = payment.payment_method || {};
   const copy = String(method.qr_code || "").trim();
+  const expiration = Date.parse(payment.date_of_expiration || "") || 0;
   const created = Date.parse(order?.created_date || order?.date_created || "") || 0;
-  const expiresAt = created ? created + PIX_MS : 0;
+  const expiresAt = expiration || (created ? created + PIX_MS : 0);
   return { paid: false, pixCopy: copy, expiresAt };
 }
 
@@ -195,7 +196,7 @@ export function mpPublicError(error, fallback = "Não foi possível concluir o p
     return "Este cartão está desativado. Tente outro cartão ou Pix.";
   }
   if (/cc_rejected_high_risk|high.?risk/i.test(message)) {
-    return "O pagamento foi recusado. Tente Pix ou outro cartão.";
+    return "O Mercado Pago recusou este cartão na análise de segurança. O Pix continua valendo em Pedidos. Tente outro cartão.";
   }
   if (/cc_rejected_max_attempts|max_attempts/i.test(message)) {
     return "Muitas tentativas neste cartão. Use Pix ou outro cartão.";
