@@ -576,13 +576,6 @@ export default function Checkout() {
         setPixCopy(payload.pixCopy);
         if (payload.expiresAt) setPixExpiresAt(Number(payload.expiresAt));
       }
-      if (!response.ok) {
-        if (payload.pixCopy) {
-          goPix(payload.pixCopy, payload.expiresAt);
-          return;
-        }
-        throw new Error(payload.error || "Não foi possível pagar com cartão.");
-      }
       if (payload.paid) {
         goPaid();
         return;
@@ -595,6 +588,22 @@ export default function Checkout() {
       if (payload.pending) {
         setCompleting(true);
         return;
+      }
+      if (!response.ok) {
+        if (payload.pixCopy) {
+          goPix(payload.pixCopy, payload.expiresAt);
+          return;
+        }
+        // Às vezes o MP devolve high_risk e o webhook confirma pago em seguida.
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          const check = await fetchCheckoutSession(sessionId);
+          if (check.ok && check.payload?.paid) {
+            goPaid();
+            return;
+          }
+        }
+        throw new Error(payload.error || "Não foi possível pagar com cartão.");
       }
       throw new Error(payload.error || "O pagamento não foi aprovado. Confira os dados ou tente Pix.");
     } catch (failure) {

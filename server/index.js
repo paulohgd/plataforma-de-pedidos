@@ -947,6 +947,30 @@ function livePixPayload(order) {
   return { pixCopy: pix.pixCopy, expiresAt: pix.expiresAt };
 }
 
+async function recoverPaidCard(existing, accessToken, mpOrder) {
+  if (!existing?.id || !accessToken) return null;
+  if (mpOrder?.id) await rememberMpOrder(existing.id, mpOrder).catch(() => {});
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 1500));
+    const latest = await loadOrderBySession(existing.id);
+    if (latest?.status === "paid") return latest;
+    let current = mpOrder;
+    if (mpOrder?.id) {
+      current = (await getMpOrder(accessToken, mpOrder.id).catch(() => current)) || current;
+    }
+    if (!mpOrderPaid(current)) {
+      current = (await searchMpOrderByRef(accessToken, existing.id).catch(() => null)) || current;
+    }
+    if (mpOrderPaid(current)) {
+      await rememberMpOrder(existing.id, current).catch(() => {});
+      return (await fulfill(existing.id, current)) || (await loadOrderBySession(existing.id));
+    }
+    const settled = await settleOrder(latest || existing);
+    if (settled?.status === "paid") return settled;
+  }
+  return null;
+}
+
 async function payCard(request, response) {
   if (!supabase) {
     json(response, 503, { error: "Pagamento ainda não está configurado no servidor." });
@@ -1098,6 +1122,12 @@ async function payCard(request, response) {
       json(response, 200, { paid: false, pending: true });
       return;
     }
+    const recovered = await recoverPaidCard(existing, accessToken, created);
+    if (recovered?.status === "paid") {
+      json(response, 200, { paid: true });
+      return;
+    }
+    if (created?.id) await rememberMpOrder(existing.id, created).catch(() => {});
     const detail = firstPayment(created)?.status_detail || created?.status_detail || created?.status || "";
     const kind = firstPayment(created)?.payment_method?.type || paymentType;
     console.error("Cartão MP:", created?.status, detail, kind, JSON.stringify(created?.config || {}).slice(0, 240));
@@ -1115,6 +1145,12 @@ async function payCard(request, response) {
       });
       return;
     }
+    const recovered = await recoverPaidCard(existing, accessToken, failed);
+    if (recovered?.status === "paid") {
+      json(response, 200, { paid: true });
+      return;
+    }
+    if (failed?.id) await rememberMpOrder(existing.id, failed).catch(() => {});
     const detail = firstPayment(failed)?.status_detail || failed?.status_detail || error.message;
     const kind = firstPayment(failed)?.payment_method?.type || paymentType;
     console.error(
