@@ -1,5 +1,5 @@
 import { paidMessage, paidTitle, shop as defaultShop } from "./config";
-import { asMpKey, isMpCredential } from "./mp";
+import { asStripePublishableKey, asStripeSecretKey, isStripeSecretKey } from "./stripeKeys";
 import { saoPauloDayBounds, slugify } from "./format";
 import { cleanCoupons } from "./coupons";
 import { cleanDeliveryFees, cleanDeliveryMaxKm, cleanMinOrder, defaultDeliveryFees } from "./freight";
@@ -62,7 +62,9 @@ function toStore(shop, categories, products, itemTypes) {
       open: shop.is_open !== false,
       openLabel: shop.open_label || defaultShop.openLabel,
       closedLabel: shop.closed_label || defaultShop.closedLabel,
-      mpPublicKey: asMpKey(shop.mp_public_key) || asMpKey(shop.stripe_publishable_key),
+      mpPublicKey: asStripePublishableKey(shop.stripe_publishable_key) || asStripePublishableKey(shop.mp_public_key),
+      stripePublishableKey:
+        asStripePublishableKey(shop.stripe_publishable_key) || asStripePublishableKey(shop.mp_public_key),
       paidTitle: shop.paid_title || paidTitle,
       paidMessage: shop.paid_message || paidMessage,
       logo: shop.logo || "",
@@ -238,19 +240,21 @@ export async function deleteMyAccount(userId) {
 
 export async function fetchShopSecretStatus(shopId) {
   const { data, error } = await supabase.from("shop_secrets").select("*").eq("shop_id", shopId).maybeSingle();
-  if (error) return { error: explain(error), mercadoPago: false, discord: false };
+  if (error) return { error: explain(error), stripe: false, mercadoPago: false, discord: false };
+  const stripe = Boolean(asStripeSecretKey(data?.stripe_secret_key));
   return {
     error: "",
-    mercadoPago: Boolean(asMpKey(data?.mp_access_token) || asMpKey(data?.stripe_secret_key)),
+    stripe,
+    mercadoPago: stripe,
     discord: Boolean(String(data?.discord_webhook_url || "").trim()),
   };
 }
 
-export async function saveShopSecrets(shopId, { mpAccessToken, discordWebhookUrl }) {
-  const token = String(mpAccessToken || "").trim();
+export async function saveShopSecrets(shopId, { stripeSecretKey, mpAccessToken, discordWebhookUrl }) {
+  const token = String(stripeSecretKey || mpAccessToken || "").trim();
   const discord = String(discordWebhookUrl || "").trim();
-  if (token && !isMpCredential(token)) {
-    return "Cole o Access Token do Mercado Pago desta loja (TEST- ou APP_USR-).";
+  if (token && !isStripeSecretKey(token)) {
+    return "Cole a chave secreta da Stripe desta loja (sk_test_... ou sk_live_...).";
   }
   if (discord && !discord.startsWith("https://discord.com/api/webhooks/")) {
     return "O webhook do Discord deve começar com https://discord.com/api/webhooks/";
@@ -267,11 +271,11 @@ export async function saveShopSecrets(shopId, { mpAccessToken, discordWebhookUrl
           "Content-Type": "application/json",
           Authorization: `Bearer ${access}`,
         },
-        body: JSON.stringify({ shopId, mpAccessToken: token, discordWebhookUrl: discord }),
+        body: JSON.stringify({ shopId, stripeSecretKey: token, discordWebhookUrl: discord }),
       });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) return payload.error || "Não foi possível gravar o Access Token.";
-      if (token && !payload.mercadoPago) return "O Access Token não ficou salvo.";
+      if (!response.ok) return payload.error || "Não foi possível gravar a chave secreta da Stripe.";
+      if (token && !payload.stripe) return "A chave secreta da Stripe não ficou salva.";
       return "";
     } catch (error) {
       console.error("shop_secrets api:", error.message || error);
@@ -279,7 +283,7 @@ export async function saveShopSecrets(shopId, { mpAccessToken, discordWebhookUrl
   }
 
   const patch = { updated_at: new Date().toISOString() };
-  if (token) patch.mp_access_token = token;
+  if (token) patch.stripe_secret_key = token;
   if (discord) patch.discord_webhook_url = discord;
 
   const { data: existing, error: lookupError } = await supabase
@@ -303,11 +307,7 @@ export async function saveShopSecrets(shopId, { mpAccessToken, discordWebhookUrl
     });
   }
 
-  let { error } = await write(patch);
-  if (error && token) {
-    const { mp_access_token: access, ...rest } = patch;
-    ({ error } = await write({ ...rest, stripe_secret_key: access || token }));
-  }
+  const { error } = await write(patch);
   if (error) {
     console.error("shop_secrets:", error.message || error);
     return explain(error);
@@ -325,8 +325,9 @@ export async function saveShopRow(shopId, shop) {
     is_open: shop.open,
     open_label: shop.openLabel,
     closed_label: shop.closedLabel,
-    mp_public_key: shop.mpPublicKey || "",
-    stripe_publishable_key: asMpKey(shop.mpPublicKey) || "",
+    mp_public_key: shop.mpPublicKey || shop.stripePublishableKey || "",
+    stripe_publishable_key:
+      asStripePublishableKey(shop.stripePublishableKey || shop.mpPublicKey) || "",
     paid_title: shop.paidTitle || paidTitle,
     paid_message: shop.paidMessage || paidMessage,
     logo: shop.logo || "",

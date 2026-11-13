@@ -1,7 +1,7 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, createContext } from "react";
 import { authRedirectTo, clearAuthCallbackUrl, readAuthCallbackError } from "./authCallback";
 import { paidMessage, paidTitle, shop as defaultShop } from "./config";
-import { isMpCredential } from "./mp";
+import { isStripePublishableKey } from "./stripeKeys";
 import { norm, slugify } from "./format";
 import { cleanCoupons } from "./coupons";
 import { cleanDeliveryFees, cleanDeliveryMaxKm, cleanMinOrder, defaultDeliveryFees, defaultDeliveryMaxKm } from "./freight";
@@ -542,16 +542,16 @@ export function CatalogProvider({ children }) {
       if (!String(shop.name || "").trim()) return "Informe o nome da loja.";
       const digits = String(shop.whatsapp || "").replace(/\D/g, "");
       if (digits && digits.length < 12) return "O WhatsApp precisa ter DDI e DDD. Exemplo: 5511987654321.";
-      const publishable = String(shop.mpPublicKey || "").trim();
-      if (publishable && !isMpCredential(publishable)) {
-        return "A chave pública do Mercado Pago deve começar com TEST- ou APP_USR-.";
+      const publishable = String(shop.mpPublicKey || shop.stripePublishableKey || "").trim();
+      if (publishable && !isStripePublishableKey(publishable)) {
+        return "A chave pública da Stripe deve começar com pk_test_ ou pk_live_.";
       }
-      const accessToken = String(shop.mpAccessToken || "").trim();
+      const accessToken = String(shop.mpAccessToken || shop.stripeSecretKey || "").trim();
       if (publishable && !accessToken) {
         const status = await fetchShopSecretStatus(store.shopId);
         if (status.error) return status.error;
-        if (!status.mercadoPago) {
-          return "Cole o Access Token do Mercado Pago e salve. A chave pública sozinha não cobra.";
+        if (!status.stripe && !status.mercadoPago) {
+          return "Cole a chave secreta da Stripe (sk_...) e salve. A chave pública sozinha não cobra.";
         }
       }
       let logo = String(shop.logo || "").trim();
@@ -569,7 +569,7 @@ export function CatalogProvider({ children }) {
       const error = await saveShopRow(store.shopId, nextShop);
       if (error) return error;
       const secretError = await saveShopSecrets(store.shopId, {
-        mpAccessToken: shop.mpAccessToken,
+        stripeSecretKey: shop.mpAccessToken || shop.stripeSecretKey,
         discordWebhookUrl: shop.discordWebhookUrl,
       });
       if (secretError) return secretError;

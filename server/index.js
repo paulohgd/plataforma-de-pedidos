@@ -6,37 +6,39 @@ import { paidMessage, paidTitle } from "../src/config.js";
 import { cleanCouponCode, couponDiscount, findCoupon } from "../src/coupons.js";
 import { checkoutEmail, fullPhone, payerEmail, validPhone } from "../src/format.js";
 import { formatKm } from "../src/freight.js";
-import { asMpKey, isMpCredential, isMpTestKey } from "../src/mp.js";
+import {
+  asStripePublishableKey,
+  asStripeSecretKey,
+  isStripePublishableKey,
+  isStripeSecretKey,
+  isStripeTestKey,
+} from "../src/stripeKeys.js";
 import { buildOrderText, whatsappOrderUrl } from "../src/order.js";
 import { quoteCart } from "./quote.js";
 import { sendShopDiscord } from "./discord.js";
 import { sendShopWhatsApp } from "./evolution.js";
 import { quoteDelivery } from "./freight.js";
 import {
-  createMpOrder,
-  dropMpOrder,
-  firstPayment,
-  getMpOrder,
-  searchMpOrderByRef,
-  moneyAmount,
-  mpAddress,
-  mpChallengeUrl,
-  mpItemsFromOrder,
-  mpOrderClosed,
-  mpOrderHasLivePix,
-  mpOrderInReview,
-  mpOrderNeedsChallenge,
-  mpOrderPaid,
-  mpPublicError,
-  unwrapMpOrder,
-  payerFromOrder,
-  paymentKindFromOrder,
-  pixFromOrder,
-  waitForMpOrder,
-} from "./mercadopago.js";
+  cancelIntent,
+  constructWebhookEvent,
+  createCardIntent,
+  createPixIntent,
+  paymentKindFromIntent,
+  pixFromIntent,
+  retrieveIntent,
+  searchPaidIntentByOrder,
+  stripePaymentClosed,
+  stripePaymentPaid,
+  stripePiId,
+  stripePublicError,
+} from "./stripePay.js";
 import { canLockPaymentMethod, findDuplicatePaid, normalizePaymentMethod } from "./paymentRules.js";
 import { isShopPage, sendShopPage } from "./shopPage.js";
 import { publicError, readBody, readJson, securityHeaders, tooMany } from "./security.js";
+
+function moneyAmount(value) {
+  return Number(value || 0).toFixed(2);
+}
 
 const chargingOrders = new Set();
 
@@ -53,12 +55,16 @@ const supabase =
     : null;
 const notifiedOrders = new Set();
 
-function envMpPublicKey() {
-  return asMpKey(process.env.MP_PUBLIC_KEY);
+function envStripePublishableKey() {
+  return asStripePublishableKey(process.env.STRIPE_PUBLISHABLE_KEY);
 }
 
-function envMpAccessToken() {
-  return asMpKey(process.env.MP_ACCESS_TOKEN);
+function envStripeSecretKey() {
+  return asStripeSecretKey(process.env.STRIPE_SECRET_KEY);
+}
+
+function envStripeWebhookSecret() {
+  return String(process.env.STRIPE_WEBHOOK_SECRET || "").trim();
 }
 
 async function loadShopForNotify(shopId) {
@@ -78,22 +84,23 @@ async function loadShopForNotify(shopId) {
 }
 
 async function loadShopSecrets(shopId) {
-  if (!supabase || !shopId) return { mpAccessToken: "", discordWebhook: "" };
+  if (!supabase || !shopId) return { stripeSecret: "", discordWebhook: "" };
   const { data, error } = await supabase.from("shop_secrets").select("*").eq("shop_id", shopId).maybeSingle();
   if (error) {
     console.error("Segredos da loja:", error.message);
-    return { mpAccessToken: "", discordWebhook: "" };
+    return { stripeSecret: "", discordWebhook: "" };
   }
-  if (!data) return { mpAccessToken: "", discordWebhook: "" };
+  if (!data) return { stripeSecret: "", discordWebhook: "" };
   return {
-    mpAccessToken: envMpAccessToken() || asMpKey(data.mp_access_token) || asMpKey(data.stripe_secret_key),
+    stripeSecret:
+      envStripeSecretKey() || asStripeSecretKey(data.stripe_secret_key) || asStripeSecretKey(data.mp_access_token),
     discordWebhook: String(data.discord_webhook_url || "").trim(),
   };
 }
 
-async function accessTokenForShop(shopId) {
-  const { mpAccessToken } = await loadShopSecrets(shopId);
-  return mpAccessToken || "";
+async function secretForShop(shopId) {
+  const { stripeSecret } = await loadShopSecrets(shopId);
+  return stripeSecret || "";
 }
 
 async function ownerFromRequest(request) {
@@ -104,7 +111,7 @@ async function ownerFromRequest(request) {
   return data.user;
 }
 
-async function saveShopMpSecrets(request, response) {
+async function saveShopStripeSecrets(request, response) {
   if (!supabase) {
     json(response, 503, { error: "Pagamento ainda não está configurado no servidor." });
     return;
@@ -116,10 +123,10 @@ async function saveShopMpSecrets(request, response) {
   }
   const payload = await readJson(request, 8192);
   const shopId = String(payload.shopId || "").trim();
-  const token = String(payload.mpAccessToken || "").trim();
+  const token = String(payload.stripeSecretKey || payload.mpAccessToken || "").trim();
   const discord = String(payload.discordWebhookUrl || "").trim();
-  if (token && !isMpCredential(token)) {
-    json(response, 400, { error: "Cole o Access Token do Mercado Pago desta loja (TEST- ou APP_USR-)." });
+  if (token && !isStripeSecretKey(token)) {
+    json(response, 400, { error: "Cole a chave secreta da Stripe desta loja (sk_test_... ou sk_live_...)." });
     return;
   }
   if (discord && !discord.startsWith("https://discord.com/api/webhooks/")) {
@@ -132,7 +139,7 @@ async function saveShopMpSecrets(request, response) {
     return;
   }
   if (!token && !discord) {
-    json(response, 200, { ok: true, mercadoPago: false });
+    json(response, 200, { ok: true, stripe: false });
     return;
   }
   const { data: existing } = await supabase.from("shop_secrets").select("shop_id").eq("shop_id", shopId).maybeSingle();
@@ -140,43 +147,45 @@ async function saveShopMpSecrets(request, response) {
     shop_id: shopId,
     updated_at: new Date().toISOString(),
   };
-  if (token) {
-    row.mp_access_token = token;
-    row.stripe_secret_key = token;
-  }
+  if (token) row.stripe_secret_key = token;
   if (discord) row.discord_webhook_url = discord;
   const written = existing
-    ? await supabase.from("shop_secrets").update(row).eq("shop_id", shopId).select("mp_access_token, stripe_secret_key").maybeSingle()
-    : await supabase.from("shop_secrets").insert({
-        stripe_secret_key: token || "",
-        discord_webhook_url: discord || "",
-        ...row,
-      }).select("mp_access_token, stripe_secret_key").maybeSingle();
+    ? await supabase.from("shop_secrets").update(row).eq("shop_id", shopId).select("stripe_secret_key").maybeSingle()
+    : await supabase
+        .from("shop_secrets")
+        .insert({
+          stripe_secret_key: token || "",
+          discord_webhook_url: discord || "",
+          ...row,
+        })
+        .select("stripe_secret_key")
+        .maybeSingle();
   if (written.error) {
     console.error("shop_secrets:", written.error.message);
-    json(response, 500, { error: "Não foi possível gravar o Access Token." });
+    json(response, 500, { error: "Não foi possível gravar a chave secreta da Stripe." });
     return;
   }
   json(response, 200, {
     ok: true,
-    mercadoPago: Boolean(asMpKey(written.data?.mp_access_token) || asMpKey(written.data?.stripe_secret_key)),
+    stripe: Boolean(asStripeSecretKey(written.data?.stripe_secret_key)),
   });
 }
 
 function shopPublicKey(shop) {
-  return envMpPublicKey() || shop?.mpPublicKey || "";
+  return (
+    envStripePublishableKey() ||
+    asStripePublishableKey(shop?.stripePublishableKey) ||
+    asStripePublishableKey(shop?.mpPublicKey) ||
+    ""
+  );
 }
 
-function missingMpConfig(accessToken, publicKey) {
-  if (!publicKey && !accessToken) {
-    return "Falta configurar as chaves do Mercado Pago nas configurações da loja.";
+function missingStripeConfig(secret, publicKey) {
+  if (!publicKey && !secret) {
+    return "Falta configurar as chaves da Stripe nas configurações da loja.";
   }
-  if (!publicKey) return "Falta a chave pública do Mercado Pago nas configurações da loja.";
-  return "Falta o Access Token do Mercado Pago nas configurações da loja. Cole de novo e salve.";
-}
-
-function isMpTestMode(publicKey, accessToken) {
-  return isMpTestKey(publicKey) || isMpTestKey(accessToken);
+  if (!publicKey) return "Falta a chave pública da Stripe (pk_...) nas configurações da loja.";
+  return "Falta a chave secreta da Stripe (sk_...) nas configurações da loja. Cole de novo e salve.";
 }
 
 function json(response, status, payload) {
@@ -206,7 +215,10 @@ async function loadShop(slug) {
       address: shop.address || "",
       cep: shop.cep || "",
       open: shop.is_open !== false,
-      mpPublicKey: asMpKey(shop.mp_public_key) || asMpKey(shop.stripe_publishable_key),
+      mpPublicKey:
+        asStripePublishableKey(shop.stripe_publishable_key) || asStripePublishableKey(shop.mp_public_key),
+      stripePublishableKey:
+        asStripePublishableKey(shop.stripe_publishable_key) || asStripePublishableKey(shop.mp_public_key),
       paidTitle: shop.paid_title || paidTitle,
       paidMessage: shop.paid_message || paidMessage,
       minOrder: shop.min_order,
@@ -262,11 +274,6 @@ function orderTextFromRow(shop, order, payment) {
   });
 }
 
-function mpOrderId(value) {
-  const id = String(value || "").trim();
-  return /^ORD/i.test(id) ? id : "";
-}
-
 async function lockPaymentMethod(order, method) {
   const check = canLockPaymentMethod(order?.payment_method, method);
   if (!check.ok) return { ok: false, error: check.error, order };
@@ -313,16 +320,16 @@ async function flagDuplicatePayments(paidOrder) {
   console.error("Pagamento duplicado:", paidOrder.id, other.id);
 }
 
-async function fulfill(orderId, mpOrder) {
-  if (!orderId || !mpOrderPaid(mpOrder)) return null;
+async function fulfill(orderId, intent) {
+  if (!orderId || !stripePaymentPaid(intent)) return null;
   const paidAt = new Date().toISOString();
-  const payment = paymentKindFromOrder(mpOrder);
-  const paymentId = String(firstPaymentId(mpOrder) || "");
+  const payment = paymentKindFromIntent(intent);
+  const intentId = String(intent.id || "");
   const patch = {
     status: "paid",
     paid_at: paidAt,
-    stripe_session_id: String(mpOrder.id || ""),
-    stripe_payment_intent: paymentId,
+    stripe_session_id: intentId,
+    stripe_payment_intent: intentId,
     payment_method: payment,
   };
   let { data, error } = await supabase
@@ -373,19 +380,15 @@ async function fulfill(orderId, mpOrder) {
   return (await supabase.from("orders").select("*").eq("id", orderId).maybeSingle()).data || null;
 }
 
-function firstPaymentId(mpOrder) {
-  return mpOrder?.transactions?.payments?.[0]?.id || "";
-}
-
-async function markCanceled(orderId, mpOrder) {
+async function markCanceled(orderId, intent) {
   if (!orderId) return null;
-  const paymentId = String(firstPaymentId(mpOrder) || "");
+  const intentId = String(intent?.id || "");
   const { data, error } = await supabase
     .from("orders")
     .update({
       status: "canceled",
-      stripe_session_id: String(mpOrder?.id || ""),
-      stripe_payment_intent: paymentId,
+      stripe_session_id: intentId || undefined,
+      stripe_payment_intent: intentId || undefined,
     })
     .eq("id", orderId)
     .eq("status", "pending")
@@ -396,21 +399,21 @@ async function markCanceled(orderId, mpOrder) {
   return (await supabase.from("orders").select("*").eq("id", orderId).maybeSingle()).data || null;
 }
 
-function sameMpReference(existing, mpOrder) {
-  const ref = String(mpOrder?.external_reference || "").trim();
+function sameOrderReference(existing, intent) {
+  const ref = String(intent?.metadata?.order_id || "").trim();
   return !ref || ref === String(existing?.id || "");
 }
 
-async function applyMpOrder(existing, mpOrder) {
-  if (!existing || !mpOrder) return existing;
+async function applyStripeIntent(existing, intent) {
+  if (!existing || !intent) return existing;
   if (existing.status === "paid") return existing;
-  if (!sameMpReference(existing, mpOrder)) return existing;
-  if (mpOrderPaid(mpOrder)) return (await fulfill(existing.id, mpOrder)) || existing;
-  if (mpOrderClosed(mpOrder)) {
-    const currentId = mpOrderId(existing.stripe_session_id);
-    const closedId = mpOrderId(mpOrder.id);
+  if (!sameOrderReference(existing, intent)) return existing;
+  if (stripePaymentPaid(intent)) return (await fulfill(existing.id, intent)) || existing;
+  if (stripePaymentClosed(intent)) {
+    const currentId = stripePiId(existing.stripe_session_id);
+    const closedId = stripePiId(intent.id);
     if (currentId && closedId && currentId !== closedId) return existing;
-    return (await markCanceled(existing.id, mpOrder)) || existing;
+    return (await markCanceled(existing.id, intent)) || existing;
   }
   return existing;
 }
@@ -422,26 +425,32 @@ async function reopenPending(orderId) {
 async function settleOrder(existing) {
   if (!existing) return existing;
   if (existing.status === "paid") return existing;
-  const token = await accessTokenForShop(existing.shop_id);
-  if (!token) return existing;
-  const mpId = mpOrderId(existing.stripe_session_id);
-  let mpOrder = null;
-  if (mpId) {
+  const secret = await secretForShop(existing.shop_id);
+  if (!secret) return existing;
+  const piId = stripePiId(existing.stripe_session_id) || stripePiId(existing.stripe_payment_intent);
+  let intent = null;
+  if (piId) {
     try {
-      mpOrder = await getMpOrder(token, mpId);
+      intent = await retrieveIntent(secret, piId);
     } catch (error) {
-      console.error("Consulta do Mercado Pago:", error.message);
+      console.error("Consulta Stripe:", error.message);
     }
   }
-  if (!mpOrderPaid(mpOrder)) {
+  if (!stripePaymentPaid(intent)) {
     try {
-      mpOrder = (await searchMpOrderByRef(token, existing.id)) || mpOrder;
+      intent = (await searchPaidIntentByOrder(secret, existing.id)) || intent;
     } catch (error) {
-      console.error("Busca do Mercado Pago:", error.message);
+      console.error("Busca Stripe:", error.message);
     }
   }
-  if (!mpOrder) return existing;
-  return applyMpOrder(existing, mpOrder);
+  if (!intent) return existing;
+  return applyStripeIntent(existing, intent);
+}
+
+async function rememberIntent(orderId, intent) {
+  const id = String(intent?.id || "");
+  if (!orderId || !id) return;
+  await supabase.from("orders").update({ stripe_session_id: id, stripe_payment_intent: id }).eq("id", orderId);
 }
 
 async function loadOrderBySession(sessionId) {
@@ -452,11 +461,31 @@ async function loadOrderBySession(sessionId) {
   return (await supabase.from("orders").select("*").eq("stripe_session_id", id).maybeSingle()).data;
 }
 
-async function rememberMpOrder(orderId, mpOrder) {
-  const patch = { stripe_session_id: String(mpOrder?.id || "") };
-  const paymentId = firstPaymentId(mpOrder);
-  if (paymentId) patch.stripe_payment_intent = paymentId;
-  await supabase.from("orders").update(patch).eq("id", orderId);
+function mpLocation(uf) {
+  const state = String(uf || "").trim().toUpperCase();
+  return state.length === 2 ? `BR-${state}` : "BR-SP";
+}
+
+function orderAmount(existing) {
+  return moneyAmount(existing.total);
+}
+
+function customerPlace(order, payload = {}) {
+  const incoming = payload.place && typeof payload.place === "object" ? payload.place : {};
+  const saved = order?.customer_place && typeof order.customer_place === "object" ? order.customer_place : {};
+  return {
+    cep: String(incoming.cep || saved.cep || "").replace(/\D/g, "").slice(0, 8),
+    street: String(incoming.street || saved.street || "").trim(),
+    number: String(incoming.number || saved.number || "").trim(),
+    neighborhood: String(incoming.neighborhood || saved.neighborhood || "").trim(),
+    city: String(incoming.city || saved.city || "").trim(),
+    uf: String(incoming.uf || saved.uf || "").trim().toUpperCase(),
+    complement: String(incoming.complement || saved.complement || "").trim(),
+  };
+}
+
+function orderPayerEmail(order) {
+  return checkoutEmail(order?.customer_whatsapp, order?.id);
 }
 
 async function createCheckout(request, response) {
@@ -511,10 +540,10 @@ async function createCheckout(request, response) {
     return;
   }
 
-  const accessToken = await accessTokenForShop(store.shopId);
+  const accessToken = await secretForShop(store.shopId);
   const publicKey = shopPublicKey(store.shop);
   if (!accessToken || !publicKey) {
-    json(response, 503, { error: missingMpConfig(accessToken, publicKey) });
+    json(response, 503, { error: missingStripeConfig(accessToken, publicKey) });
     return;
   }
 
@@ -665,59 +694,6 @@ async function shopCopy(shopId) {
   return (await supabase.from("shops").select("name, slug, whatsapp").eq("id", shopId).maybeSingle()).data;
 }
 
-async function readSession(request, response) {
-  if (!supabase) {
-    json(response, 503, { error: "Pagamento ainda não está configurado no servidor." });
-    return;
-  }
-  const payload = await readJson(request, 4096);
-  const sessionId = String(payload.sessionId || "");
-  const existing = await loadOrderBySession(sessionId);
-  if (!existing) {
-    json(response, 404, { error: "Pedido não encontrado." });
-    return;
-  }
-  const token = await accessTokenForShop(existing.shop_id);
-  if (!token) {
-    json(response, 503, { error: missingMpConfig(token, true) });
-    return;
-  }
-  const order = await settleOrder(existing);
-  const shop = await shopCopy(order.shop_id);
-  const paid = order.status === "paid";
-  const canceled = order.status === "canceled";
-  const text = paid ? order.whatsapp_text || orderTextFromRow(shop, order) : "";
-  let payment = "";
-  let pix = { pixCopy: "", expiresAt: 0 };
-  const mpId = mpOrderId(order.stripe_session_id);
-  if (mpId) {
-    const mpOrder = await getMpOrder(token, mpId).catch(() => null);
-    if (mpOrder) {
-      payment = paymentKindFromOrder(mpOrder);
-      pix = pixFromOrder(mpOrder);
-    }
-  }
-  json(response, 200, {
-    paid,
-    canceled,
-    pending: !paid && !canceled,
-    payment: order.payment_method || payment,
-    paymentDuplicate: Boolean(order.payment_duplicate),
-    paymentDuplicateNote: order.payment_duplicate_note || "",
-    parentOrderId: order.parent_order_id || "",
-    pixCopy: pix.pixCopy || "",
-    expiresAt: pix.expiresAt || 0,
-    shopName: shop?.name || "",
-    shopLogo: shop?.logo || "",
-    total: Number(order.total || 0),
-    items: Array.isArray(order.items) ? order.items : [],
-    createdAt: order.created_at,
-    paidTitle: shop?.paid_title || paidTitle,
-    paidMessage: shop?.paid_message || paidMessage,
-    whatsappUrl: paid ? whatsappOrderUrl(shop, text) : "",
-  });
-}
-
 async function quoteDeliveryRoute(request, response) {
   if (!supabase) {
     json(response, 503, { error: "Pagamento ainda não está configurado no servidor." });
@@ -752,94 +728,57 @@ async function quoteDeliveryRoute(request, response) {
   json(response, 200, quote);
 }
 
-function mpLocation(uf) {
-  const state = String(uf || "").trim().toUpperCase();
-  return state.length === 2 ? `BR-${state}` : "BR-SP";
-}
-
-function orderAmount(existing) {
-  return moneyAmount(existing.total);
-}
-
-function customerPlace(order, payload = {}) {
-  const incoming = payload.place && typeof payload.place === "object" ? payload.place : {};
-  const saved = order?.customer_place && typeof order.customer_place === "object" ? order.customer_place : {};
-  return {
-    cep: String(incoming.cep || saved.cep || "").replace(/\D/g, "").slice(0, 8),
-    street: String(incoming.street || saved.street || "").trim(),
-    number: String(incoming.number || saved.number || "").trim(),
-    neighborhood: String(incoming.neighborhood || saved.neighborhood || "").trim(),
-    city: String(incoming.city || saved.city || "").trim(),
-    uf: String(incoming.uf || saved.uf || "").trim().toUpperCase(),
-    complement: String(incoming.complement || saved.complement || "").trim(),
-  };
-}
-
-function orderPayerEmail(order) {
-  return checkoutEmail(order?.customer_whatsapp, order?.id);
-}
-
-async function payerAdditionalInfo(existing) {
-  const info = {
-    "payer.authentication_type": "WEB",
-    "payer.is_prime_user": false,
-    "payer.is_first_purchase_online": true,
-  };
-  const pickup = existing.customer_mode !== "entrega";
-  info["shipment.express"] = false;
-  info["shipment.local_pickup"] = pickup;
-  if (!supabase || !existing?.shop_id || !existing?.customer_whatsapp) return info;
-  const { data: rows } = await supabase
-    .from("orders")
-    .select("paid_at, created_at")
-    .eq("shop_id", existing.shop_id)
-    .eq("customer_whatsapp", existing.customer_whatsapp)
-    .eq("status", "paid")
-    .order("created_at", { ascending: false })
-    .limit(1);
-  const previous = Array.isArray(rows) ? rows[0] : null;
-  if (!previous) return info;
-  info["payer.is_first_purchase_online"] = false;
-  const last = previous.paid_at || previous.created_at;
-  if (last) info["payer.last_purchase"] = last;
-  return info;
-}
-
-function mpPaymentBody(existing, payer, payment, place, { with3ds = false, additionalInfo = null } = {}) {
-  const amount = orderAmount(existing);
-  const { expiration_time: expirationTime, issuer_id: _issuerId, ...paymentMethod } = payment;
-  const row = { amount, payment_method: paymentMethod };
-  if (expirationTime) row.expiration_time = expirationTime;
-  const pickup = existing.customer_mode !== "entrega";
-  const address = mpAddress(place);
-  if (address && !payer.address) payer.address = address;
-  const config = { location: { state_id: mpLocation(place?.uf) } };
-  if (with3ds) {
-    // validation=always invalida o token nesta conta; on_fraud_risk é o modo documentado.
-    config.online = {
-      transaction_security: {
-        validation: "on_fraud_risk",
-        liability_shift: "required",
-      },
-    };
+async function readSession(request, response) {
+  if (!supabase) {
+    json(response, 503, { error: "Pagamento ainda não está configurado no servidor." });
+    return;
   }
-  const body = {
-    type: "online",
-    processing_mode: "automatic",
-    total_amount: amount,
-    external_reference: existing.id,
-    description: String(existing.items?.[0]?.name || "Pedido").slice(0, 150),
-    payer,
-    items: mpItemsFromOrder(existing),
-    config,
-    transactions: {
-      payments: [row],
-    },
-  };
-  if (with3ds) body.capture_mode = "automatic_async";
-  if (additionalInfo) body.additional_info = additionalInfo;
-  if (address && !pickup) body.shipment = { address };
-  return body;
+  const payload = await readJson(request, 4096);
+  const sessionId = String(payload.sessionId || "");
+  const existing = await loadOrderBySession(sessionId);
+  if (!existing) {
+    json(response, 404, { error: "Pedido não encontrado." });
+    return;
+  }
+  const secret = await secretForShop(existing.shop_id);
+  if (!secret) {
+    json(response, 503, { error: missingStripeConfig(secret, true) });
+    return;
+  }
+  const order = await settleOrder(existing);
+  const shop = await shopCopy(order.shop_id);
+  const paid = order.status === "paid";
+  const canceled = order.status === "canceled";
+  const text = paid ? order.whatsapp_text || orderTextFromRow(shop, order) : "";
+  let payment = order.payment_method || "";
+  let pix = { pixCopy: "", expiresAt: 0 };
+  const piId = stripePiId(order.stripe_session_id) || stripePiId(order.stripe_payment_intent);
+  if (piId) {
+    const intent = await retrieveIntent(secret, piId).catch(() => null);
+    if (intent) {
+      payment = payment || paymentKindFromIntent(intent);
+      pix = pixFromIntent(intent);
+    }
+  }
+  json(response, 200, {
+    paid,
+    canceled,
+    pending: !paid && !canceled,
+    payment,
+    paymentDuplicate: Boolean(order.payment_duplicate),
+    paymentDuplicateNote: order.payment_duplicate_note || "",
+    parentOrderId: order.parent_order_id || "",
+    pixCopy: pix.pixCopy || "",
+    expiresAt: pix.expiresAt || 0,
+    shopName: shop?.name || "",
+    shopLogo: shop?.logo || "",
+    total: Number(order.total || 0),
+    items: Array.isArray(order.items) ? order.items : [],
+    createdAt: order.created_at,
+    paidTitle: shop?.paid_title || paidTitle,
+    paidMessage: shop?.paid_message || paidMessage,
+    whatsappUrl: paid ? whatsappOrderUrl(shop, text) : "",
+  });
 }
 
 async function createPix(request, response) {
@@ -868,9 +807,9 @@ async function createPix(request, response) {
     return;
   }
   existing = locked.order;
-  const token = await accessTokenForShop(existing.shop_id);
-  if (!token) {
-    json(response, 503, { error: missingMpConfig(token, true) });
+  const secret = await secretForShop(existing.shop_id);
+  if (!secret) {
+    json(response, 503, { error: missingStripeConfig(secret, true) });
     return;
   }
   if (chargingOrders.has(existing.id)) {
@@ -879,55 +818,40 @@ async function createPix(request, response) {
   }
   chargingOrders.add(existing.id);
   try {
-    const currentId = mpOrderId(existing.stripe_session_id);
+    const currentId = stripePiId(existing.stripe_session_id);
     if (currentId) {
-      let previous = await getMpOrder(token, currentId).catch(() => null);
-      if (previous) previous = await waitForMpOrder(token, previous, { wantPix: true });
+      const previous = await retrieveIntent(secret, currentId).catch(() => null);
       if (previous) {
-        if (mpOrderPaid(previous)) {
+        if (stripePaymentPaid(previous)) {
           await fulfill(existing.id, previous);
           json(response, 200, { paid: true, pixCopy: "", expiresAt: 0 });
           return;
         }
-        if (mpOrderInReview(previous) && paymentKindFromOrder(previous) === "card") {
-          json(response, 200, { paid: false, pending: true, pixCopy: "", expiresAt: 0 });
+        const live = pixFromIntent(previous);
+        if (live.pixCopy && !stripePaymentClosed(previous)) {
+          json(response, 200, { ...live, payment: "pix" });
           return;
         }
-        if (mpOrderHasLivePix(previous)) {
-          json(response, 200, pixFromOrder(previous));
-          return;
-        }
-        if (!mpOrderClosed(previous) && paymentKindFromOrder(previous) === "pix") {
-          // Mantém o Pix no Mercado Pago (PT30M). A tela só corta a oferta em 5 min.
-          json(response, 200, pixFromOrder(previous));
-          return;
-        }
-        if (!mpOrderClosed(previous)) {
-          await dropMpOrder(token, currentId);
+        if (!stripePaymentClosed(previous) && !stripePaymentPaid(previous)) {
+          await cancelIntent(secret, currentId).catch(() => null);
         }
       }
     }
-    const place = customerPlace(existing, payload);
-    const payer = payerFromOrder(existing, orderPayerEmail(existing), place);
-    const shopKeys = (await supabase.from("shops").select("mp_public_key, stripe_publishable_key").eq("id", existing.shop_id).maybeSingle()).data;
-    const publicKey = shopPublicKey({
-      mpPublicKey: asMpKey(shopKeys?.mp_public_key) || asMpKey(shopKeys?.stripe_publishable_key),
+    const email = payerEmail(payload.email) || checkoutEmail(existing.customer_whatsapp, existing.id);
+    const created = await createPixIntent(secret, {
+      amount: existing.total,
+      orderId: existing.id,
+      name: existing.customer_name,
+      email,
+      taxId: payload.taxId || payload.cpf || "",
     });
-    if (isMpTestMode(publicKey, token)) payer.first_name = "APRO";
-    let created = await createMpOrder(
-      token,
-      // Menos de 30 minutos faz o Mercado Pago expirar o Pix na hora. A tela corta em 5.
-      mpPaymentBody(existing, payer, { id: "pix", type: "bank_transfer", expiration_time: "PT30M" }, place),
-      { deviceId: String(payload.deviceId || "").trim() },
-    );
-    created = await waitForMpOrder(token, created, { wantPix: true });
-    await rememberMpOrder(existing.id, created);
-    if (mpOrderPaid(created)) {
+    await rememberIntent(existing.id, created);
+    if (stripePaymentPaid(created)) {
       await fulfill(existing.id, created);
       json(response, 200, { paid: true, pixCopy: "", expiresAt: 0 });
       return;
     }
-    const pix = pixFromOrder(created);
+    const pix = pixFromIntent(created);
     if (!pix.pixCopy) {
       json(response, 500, { error: "Não foi possível gerar o Pix. Tente de novo em instantes." });
       return;
@@ -935,40 +859,10 @@ async function createPix(request, response) {
     json(response, 200, { ...pix, payment: "pix" });
   } catch (error) {
     console.error("Pix:", error.message);
-    json(response, 500, { error: mpPublicError(error, "Não foi possível gerar o Pix.") });
+    json(response, 500, { error: stripePublicError(error, "Não foi possível gerar o Pix.") });
   } finally {
     chargingOrders.delete(existing.id);
   }
-}
-
-function livePixPayload(order) {
-  if (!mpOrderHasLivePix(order)) return {};
-  const pix = pixFromOrder(order);
-  return { pixCopy: pix.pixCopy, expiresAt: pix.expiresAt };
-}
-
-async function recoverPaidCard(existing, accessToken, mpOrder) {
-  if (!existing?.id || !accessToken) return null;
-  if (mpOrder?.id) await rememberMpOrder(existing.id, mpOrder).catch(() => {});
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 1500));
-    const latest = await loadOrderBySession(existing.id);
-    if (latest?.status === "paid") return latest;
-    let current = mpOrder;
-    if (mpOrder?.id) {
-      current = (await getMpOrder(accessToken, mpOrder.id).catch(() => current)) || current;
-    }
-    if (!mpOrderPaid(current)) {
-      current = (await searchMpOrderByRef(accessToken, existing.id).catch(() => null)) || current;
-    }
-    if (mpOrderPaid(current)) {
-      await rememberMpOrder(existing.id, current).catch(() => {});
-      return (await fulfill(existing.id, current)) || (await loadOrderBySession(existing.id));
-    }
-    const settled = await settleOrder(latest || existing);
-    if (settled?.status === "paid") return settled;
-  }
-  return null;
 }
 
 async function payCard(request, response) {
@@ -1000,27 +894,14 @@ async function payCard(request, response) {
     return;
   }
   existing = locked.order;
-  const token = String(payload.token || "").trim();
-  const paymentMethodId = String(payload.paymentMethodId || "").trim().toLowerCase();
-  const paymentType = String(payload.paymentTypeId || "credit_card").trim().toLowerCase();
-  const installments = 1;
-  const deviceId = String(payload.deviceId || "").trim();
   const cardEmail = payerEmail(payload.email);
-  if (!token || !paymentMethodId) {
-    json(response, 400, { error: "Informe os dados do cartão." });
-    return;
-  }
   if (!cardEmail) {
     json(response, 400, { error: "Informe um e-mail válido para pagar com cartão." });
     return;
   }
-  if (!deviceId) {
-    json(response, 400, { error: "Não foi possível validar este dispositivo. Atualize a página e tente de novo." });
-    return;
-  }
-  const accessToken = await accessTokenForShop(existing.shop_id);
-  if (!accessToken) {
-    json(response, 503, { error: missingMpConfig(accessToken, true) });
+  const secret = await secretForShop(existing.shop_id);
+  if (!secret) {
+    json(response, 503, { error: missingStripeConfig(secret, true) });
     return;
   }
   if (chargingOrders.has(existing.id)) {
@@ -1029,185 +910,115 @@ async function payCard(request, response) {
   }
   chargingOrders.add(existing.id);
   try {
-    const currentId = mpOrderId(existing.stripe_session_id);
+    const currentId = stripePiId(existing.stripe_session_id);
     if (currentId) {
-      let previous = await getMpOrder(accessToken, currentId).catch(() => null);
-      if (previous && !mpOrderHasLivePix(previous) && !mpOrderPaid(previous) && !mpOrderClosed(previous)) {
-        previous = await waitForMpOrder(accessToken, previous);
-      }
-      if (previous && mpOrderPaid(previous)) {
+      const previous = await retrieveIntent(secret, currentId).catch(() => null);
+      if (previous && stripePaymentPaid(previous)) {
         await fulfill(existing.id, previous);
         json(response, 200, { paid: true });
         return;
       }
-      if (previous && mpOrderNeedsChallenge(previous)) {
-        await rememberMpOrder(existing.id, previous);
+      if (previous && paymentKindFromIntent(previous) === "pix" && !stripePaymentClosed(previous)) {
+        const live = pixFromIntent(previous);
+        if (live.pixCopy) {
+          json(response, 409, {
+            error: "Este pedido já está no Pix. Para pagar com cartão, inicie um novo pedido.",
+            needsNewCheckout: true,
+            ...live,
+          });
+          return;
+        }
+      }
+      if (
+        previous &&
+        paymentKindFromIntent(previous) === "card" &&
+        previous.status === "requires_payment_method" &&
+        previous.client_secret
+      ) {
         json(response, 200, {
           paid: false,
-          pending: true,
-          challengeUrl: mpChallengeUrl(previous),
+          clientSecret: previous.client_secret,
+          paymentIntentId: previous.id,
         });
         return;
       }
-      if (previous && (mpOrderInReview(previous) || (paymentKindFromOrder(previous) === "card" && !mpOrderClosed(previous)))) {
-        await rememberMpOrder(existing.id, previous);
-        json(response, 200, { paid: false, pending: true });
-        return;
-      }
-      if (mpOrderHasLivePix(previous) || paymentKindFromOrder(previous) === "pix") {
-        json(response, 409, {
-          error: "Este pedido já está no Pix. Para pagar com cartão, inicie um novo pedido.",
-          needsNewCheckout: true,
-          ...livePixPayload(previous),
-        });
-        return;
-      }
-      if (previous && !mpOrderClosed(previous) && !mpOrderPaid(previous)) {
-        await dropMpOrder(accessToken, currentId);
+      if (previous && !stripePaymentClosed(previous) && !stripePaymentPaid(previous)) {
+        await cancelIntent(secret, currentId).catch(() => null);
       }
     }
-    const identification = payload.identification && payload.identification.number
-      ? {
-          type: String(payload.identification.type || "CPF").toUpperCase(),
-          number: String(payload.identification.number || "").replace(/\D/g, ""),
-        }
-      : null;
-    const place = customerPlace(existing, payload);
-    const payer = payerFromOrder(existing, cardEmail, place);
-    if (identification) payer.identification = identification;
-    const additionalInfo = await payerAdditionalInfo(existing);
-    const cardType = paymentType === "debit_card" ? "debit_card" : "credit_card";
-    const cardInstallments = Math.max(1, Math.min(12, Number(payload.installments) || installments || 1));
-    let created = await createMpOrder(
-      accessToken,
-      mpPaymentBody(
-        existing,
-        payer,
-        {
-          id: paymentMethodId,
-          type: cardType,
-          token,
-          installments: cardType === "debit_card" ? 1 : cardInstallments,
-          statement_descriptor: "PEDIAQUI",
-        },
-        place,
-        { with3ds: true, additionalInfo },
-      ),
-      { deviceId },
-    );
-    created = await waitForMpOrder(accessToken, created);
-    const latest = await loadOrderBySession(existing.id);
-    if (latest?.status === "paid") {
-      await dropMpOrder(accessToken, created?.id);
-      json(response, 200, { paid: true });
-      return;
-    }
-    if (mpOrderPaid(created)) {
-      await rememberMpOrder(existing.id, created);
+    const created = await createCardIntent(secret, {
+      amount: existing.total,
+      orderId: existing.id,
+      email: cardEmail,
+      name: existing.customer_name,
+    });
+    await rememberIntent(existing.id, created);
+    if (stripePaymentPaid(created)) {
       await fulfill(existing.id, created);
       json(response, 200, { paid: true });
       return;
     }
-    if (mpOrderNeedsChallenge(created)) {
-      await rememberMpOrder(existing.id, created);
-      json(response, 200, {
-        paid: false,
-        pending: true,
-        challengeUrl: mpChallengeUrl(created),
-      });
+    if (!created.client_secret) {
+      json(response, 500, { error: "Não foi possível iniciar o pagamento com cartão." });
       return;
     }
-    if (mpOrderInReview(created)) {
-      await rememberMpOrder(existing.id, created);
-      json(response, 200, { paid: false, pending: true });
-      return;
-    }
-    const recovered = await recoverPaidCard(existing, accessToken, created);
-    if (recovered?.status === "paid") {
-      json(response, 200, { paid: true });
-      return;
-    }
-    if (created?.id) await rememberMpOrder(existing.id, created).catch(() => {});
-    const detail = firstPayment(created)?.status_detail || created?.status_detail || created?.status || "";
-    const kind = firstPayment(created)?.payment_method?.type || paymentType;
-    console.error("Cartão MP:", created?.status, detail, kind, JSON.stringify(created?.config || {}).slice(0, 240));
-    json(response, 400, {
-      error: mpPublicError(detail, "O pagamento não foi aprovado. Confira os dados ou tente Pix."),
+    json(response, 200, {
+      paid: false,
+      clientSecret: created.client_secret,
+      paymentIntentId: created.id,
     });
   } catch (error) {
-    const failed = unwrapMpOrder(error.payload);
-    if (mpOrderNeedsChallenge(failed)) {
-      await rememberMpOrder(existing.id, failed).catch(() => {});
-      json(response, 200, {
-        paid: false,
-        pending: true,
-        challengeUrl: mpChallengeUrl(failed),
-      });
-      return;
-    }
-    const recovered = await recoverPaidCard(existing, accessToken, failed);
-    if (recovered?.status === "paid") {
-      json(response, 200, { paid: true });
-      return;
-    }
-    if (failed?.id) await rememberMpOrder(existing.id, failed).catch(() => {});
-    const detail = firstPayment(failed)?.status_detail || failed?.status_detail || error.message;
-    const kind = firstPayment(failed)?.payment_method?.type || paymentType;
-    console.error(
-      "Cartão:",
-      error.message,
-      detail,
-      kind,
-      JSON.stringify({
-        config: failed?.config,
-        security: firstPayment(failed)?.payment_method?.transaction_security,
-      }).slice(0, 500),
-    );
+    console.error("Cartão:", error.message);
     json(response, 400, {
-      error: mpPublicError(detail, "Não foi possível processar o cartão agora. Tente de novo ou pague com Pix."),
+      error: stripePublicError(error, "Não foi possível processar o cartão agora. Tente de novo ou pague com Pix."),
     });
   } finally {
     chargingOrders.delete(existing.id);
   }
 }
 
-async function findOrderFromMp(data = {}) {
-  const orderId = String(data.external_reference || "").trim();
-  const mpId = mpOrderId(data.id);
+async function findOrderFromStripe(intent = {}) {
+  const orderId = String(intent.metadata?.order_id || "").trim();
+  const piId = stripePiId(intent.id);
   if (orderId) {
     const { data: row } = await supabase.from("orders").select("*").eq("id", orderId).maybeSingle();
     if (row) return row;
   }
-  if (mpId) {
-    const { data: row } = await supabase.from("orders").select("*").eq("stripe_session_id", mpId).maybeSingle();
+  if (piId) {
+    const { data: row } = await supabase.from("orders").select("*").eq("stripe_session_id", piId).maybeSingle();
     if (row) return row;
   }
   return null;
 }
 
-async function handleWebhook(request, response, url) {
+async function handleWebhook(request, response) {
   if (!supabase) {
     json(response, 200, { received: true });
     return;
   }
   const raw = await readBody(request, 262144);
   let event;
+  const signature = String(request.headers["stripe-signature"] || "");
+  const webhookSecret = envStripeWebhookSecret();
   try {
-    event = JSON.parse(raw.toString("utf8") || "{}");
-  } catch {
+    if (webhookSecret && signature) {
+      event = constructWebhookEvent(raw, signature, webhookSecret);
+    } else {
+      event = JSON.parse(Buffer.isBuffer(raw) ? raw.toString("utf8") : String(raw || "{}"));
+    }
+  } catch (error) {
+    console.error("Webhook Stripe:", error.message);
     json(response, 400, { error: "Webhook inválido." });
     return;
   }
 
-  const type = String(event.type || url.searchParams.get("type") || "").toLowerCase();
-  const data = event.data && typeof event.data === "object" ? event.data : {};
-  const mpId = mpOrderId(data.id || url.searchParams.get("data.id") || url.searchParams.get("id"));
-  if (type && type !== "order" && !mpId && !data.external_reference) {
+  const type = String(event.type || "").toLowerCase();
+  const intent = event.data?.object && typeof event.data.object === "object" ? event.data.object : {};
+  if (type && !type.startsWith("payment_intent.")) {
     json(response, 200, { received: true });
     return;
   }
-
-  const existing = await findOrderFromMp({ ...data, id: mpId || data.id });
+  const existing = await findOrderFromStripe(intent);
   if (!existing) {
     json(response, 200, { received: true });
     return;
@@ -1216,19 +1027,22 @@ async function handleWebhook(request, response, url) {
     json(response, 200, { received: true });
     return;
   }
-
   try {
-    const current = {
-      ...existing,
-      stripe_session_id: mpId || existing.stripe_session_id,
-    };
-    const settled = await settleOrder(current);
-    if (settled?.status === "pending") await applyMpOrder(current, data);
+    const secret = await secretForShop(existing.shop_id);
+    const fresh = secret ? await retrieveIntent(secret, intent.id).catch(() => intent) : intent;
+    await applyStripeIntent(
+      {
+        ...existing,
+        stripe_session_id: fresh.id || existing.stripe_session_id,
+      },
+      fresh,
+    );
   } catch (error) {
     console.error("Webhook:", error.message);
   }
   json(response, 200, { received: true });
 }
+
 
 const server = http.createServer(async (request, response) => {
   try {
@@ -1263,7 +1077,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     if (request.method === "POST" && url.pathname === "/api/shop-secrets") {
-      await saveShopMpSecrets(request, response);
+      await saveShopStripeSecrets(request, response);
       return;
     }
     if (request.method === "GET" && (url.pathname === "/api/mp-webhook" || url.pathname === "/api/stripe-webhook")) {
@@ -1288,6 +1102,6 @@ const server = http.createServer(async (request, response) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  const localTest = isMpTestMode(envMpPublicKey(), envMpAccessToken());
-  console.log(`Pagamento em http://127.0.0.1:${port}${localTest ? " · Mercado Pago teste (.env.server)" : ""}`);
+  const localTest = isStripeTestKey(envStripeSecretKey()) || isStripeTestKey(envStripePublishableKey());
+  console.log(`Pagamento em http://127.0.0.1:${port}${localTest ? " · Stripe teste (.env.server)" : ""}`);
 });
