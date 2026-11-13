@@ -64,7 +64,18 @@ export function mpOrderPending(order) {
   if (!order || mpOrderPaid(order) || mpOrderClosed(order)) return false;
   const payment = firstPayment(order);
   const statuses = [order.status, order.status_detail, payment?.status, payment?.status_detail];
-  return statuses.some(waitingStatus) || Boolean(order.id);
+  return statuses.some(waitingStatus);
+}
+
+function reviewStatus(value) {
+  const status = String(value || "").toLowerCase();
+  return ["processing", "in_process", "pending_contingency", "pending_review_manual"].includes(status);
+}
+
+export function mpOrderInReview(order) {
+  if (!order || mpOrderPaid(order) || mpOrderClosed(order)) return false;
+  const payment = firstPayment(order);
+  return [order.status, order.status_detail, payment?.status, payment?.status_detail].some(reviewStatus);
 }
 
 export function unwrapMpOrder(payload) {
@@ -75,21 +86,7 @@ export function unwrapMpOrder(payload) {
 
 export function mpItemsFromOrder(order) {
   const amount = moneyAmount(order?.total);
-  const lines = (order?.items || []).filter((line) => Number(line.total) > 0 && String(line.name || "").trim());
-  if (!lines.length) return [{ title: "Pedido", quantity: 1, unit_price: amount }];
-  const items = lines.map((line) => {
-    const quantity = Math.max(1, Number(line.qty) || 1);
-    return {
-      title: String(line.name).slice(0, 150),
-      quantity,
-      unit_price: moneyAmount(Number(line.total) / quantity),
-    };
-  });
-  const sum = items.reduce((acc, item) => acc + Number(item.unit_price) * item.quantity, 0);
-  const diff = Number((Number(order.total) - sum).toFixed(2));
-  if (diff > 0.009) items.push({ title: "Entrega", quantity: 1, unit_price: moneyAmount(diff) });
-  if (diff < -0.009) return [{ title: "Pedido", quantity: 1, unit_price: amount }];
-  return items;
+  return [{ title: "Pedido", quantity: 1, unit_price: amount }];
 }
 
 export async function waitForMpOrder(accessToken, order, { wantPix = false } = {}) {
@@ -137,6 +134,36 @@ function errorText(payload, status) {
 
 export function mpPublicError(error, fallback = "Não foi possível concluir o pagamento.") {
   const message = String(error?.message || error || "");
+  if (/cc_rejected_bad_filled_card_number|bad.?filled.?card/i.test(message)) {
+    return "Número do cartão inválido. Confira os dígitos.";
+  }
+  if (/cc_rejected_bad_filled_security_code|security.?code|cvv/i.test(message)) {
+    return "CVV inválido. Confira os três números do verso do cartão.";
+  }
+  if (/cc_rejected_bad_filled_date|expiration/i.test(message)) {
+    return "Validade do cartão inválida. Confira mês e ano.";
+  }
+  if (/cc_rejected_bad_filled|bin/i.test(message)) {
+    return "Confira os dados do cartão e o CPF.";
+  }
+  if (/cc_rejected_insufficient|insufficient/i.test(message)) {
+    return "Este cartão não tem limite. Tente outro cartão ou Pix.";
+  }
+  if (/cc_rejected_call_for_authorize|call_for_authorize/i.test(message)) {
+    return "O banco recusou. Autorize no app do cartão ou pague com Pix.";
+  }
+  if (/cc_rejected_card_disabled|card_disabled/i.test(message)) {
+    return "Este cartão está desativado. Tente outro cartão ou Pix.";
+  }
+  if (/cc_rejected_high_risk|high.?risk/i.test(message)) {
+    return "O pagamento foi recusado. Tente Pix ou outro cartão.";
+  }
+  if (/cc_rejected_max_attempts|max_attempts/i.test(message)) {
+    return "Muitas tentativas neste cartão. Use Pix ou outro cartão.";
+  }
+  if (/cc_rejected_duplicated/i.test(message)) {
+    return "Este pagamento já foi feito. Se o valor saiu, aguarde a confirmação.";
+  }
   if (/401|unauthorized|invalid.?access|invalid.?token/i.test(message)) {
     return "As chaves do Mercado Pago desta loja estão inválidas.";
   }
@@ -146,11 +173,8 @@ export function mpPublicError(error, fallback = "Não foi possível concluir o p
   if (/token/i.test(message) && /invalid|expired|used/i.test(message)) {
     return "Não foi possível processar o cartão. Confira os dados.";
   }
-  if (/card|bin|security.?code|cvv|expiration/i.test(message)) {
-    return "Não foi possível processar o cartão. Confira os dados.";
-  }
-  if (/insufficient|high.?risk|rejected|refused/i.test(message)) {
-    return "O pagamento foi recusado. Tente outro cartão ou Pix.";
+  if (/insufficient|high.?risk|rejected|refused|failed/i.test(message)) {
+    return "O pagamento foi recusado. Confira os dados ou tente Pix.";
   }
   return fallback;
 }

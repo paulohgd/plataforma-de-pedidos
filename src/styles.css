@@ -886,6 +886,43 @@ select {
 
 .checkout-page { min-height: 100vh; padding-bottom: 28px; }
 
+.pay-loading {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+  padding: 32px 24px;
+  text-align: center;
+  background: var(--bg);
+}
+
+.pay-loading h2 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.pay-loading p {
+  margin: 0;
+  max-width: 20em;
+  color: var(--muted);
+}
+
+.pay-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--field-border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: pay-spin 0.8s linear infinite;
+}
+
+@keyframes pay-spin {
+  to { transform: rotate(360deg); }
+}
+
 .paid-box {
   text-align: center;
   padding: 40px 20px 48px;
@@ -1095,9 +1132,16 @@ select {
 
 .form-error {
   color: var(--danger);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
   margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #fdecea;
+}
+
+html.dark .form-error {
+  background: #3a1816;
 }
 
 .hint, .empty-inline {

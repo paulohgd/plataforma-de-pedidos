@@ -21,9 +21,10 @@ import {
   moneyAmount,
   mpItemsFromOrder,
   mpOrderClosed,
+  mpOrderInReview,
   mpOrderPaid,
-  mpOrderPending,
   mpPublicError,
+  unwrapMpOrder,
   payerFromOrder,
   paymentKindFromOrder,
   pixFromOrder,
@@ -688,11 +689,6 @@ async function createPix(request, response) {
           json(response, 200, current);
           return;
         }
-        if (mpOrderPending(previous) && !current.pixCopy) {
-          await rememberMpOrder(existing.id, previous);
-          json(response, 200, { paid: false, pending: true });
-          return;
-        }
         await cancelMpOrder(token, currentId).catch(() => {});
       }
     }
@@ -715,11 +711,7 @@ async function createPix(request, response) {
     }
     const pix = pixFromOrder(created);
     if (!pix.pixCopy) {
-      if (mpOrderPending(created)) {
-        json(response, 200, { paid: false, pending: true });
-        return;
-      }
-      json(response, 500, { error: "Não foi possível gerar o Pix." });
+      json(response, 500, { error: "Não foi possível gerar o Pix. Tente de novo em instantes." });
       return;
     }
     json(response, 200, pix);
@@ -772,7 +764,7 @@ async function payCard(request, response) {
         json(response, 200, { paid: true });
         return;
       }
-      if (previous && mpOrderPending(previous)) {
+      if (previous && mpOrderInReview(previous)) {
         await rememberMpOrder(existing.id, previous);
         json(response, 200, { paid: false, pending: true });
         return;
@@ -807,18 +799,20 @@ async function payCard(request, response) {
       json(response, 200, { paid: true });
       return;
     }
-    if (mpOrderPending(created)) {
+    if (mpOrderInReview(created)) {
       json(response, 200, { paid: false, pending: true });
       return;
     }
     const detail = firstPayment(created)?.status_detail || created?.status_detail || created?.status || "";
     console.error("Cartão MP:", created?.status, detail);
     json(response, 400, {
-      error: mpPublicError(detail, "O pagamento não foi aprovado. Tente outro cartão ou Pix."),
+      error: mpPublicError(detail, "O pagamento não foi aprovado. Confira os dados ou tente Pix."),
     });
   } catch (error) {
-    console.error("Cartão:", error.message);
-    json(response, 400, { error: mpPublicError(error, "Não foi possível pagar com cartão.") });
+    const failed = unwrapMpOrder(error.payload);
+    const detail = firstPayment(failed)?.status_detail || failed?.status_detail || error.message;
+    console.error("Cartão:", error.message, detail);
+    json(response, 400, { error: mpPublicError(detail, "Não foi possível pagar com cartão. Confira os dados.") });
   }
 }
 

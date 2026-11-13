@@ -125,7 +125,13 @@ export default function Checkout() {
             if (!canceled) setCardReady(true);
           },
           onError: (failure) => {
-            if (!canceled) setError(failure?.message || "Não foi possível abrir o cartão.");
+            if (canceled) return;
+            const text = String(failure?.message || "");
+            setError(
+              /field|invalid|cpf|card|cvv|expir/i.test(text)
+                ? "Confira os dados do cartão. Número, validade, CVV e CPF precisam estar certos."
+                : text || "Não foi possível abrir o cartão.",
+            );
           },
         },
       });
@@ -254,7 +260,7 @@ export default function Checkout() {
         if (payload.paid) goPaid();
         else if (completing && payload.canceled) {
           setCompleting(false);
-          setError("O pagamento não foi aprovado. Tente outro cartão ou Pix.");
+          setError("O pagamento não foi aprovado. Confira os dados ou tente Pix.");
         }
       } catch {
         /* o webhook ainda pode confirmar o pedido */
@@ -267,6 +273,15 @@ export default function Checkout() {
       clearInterval(timer);
     };
   }, [paying, sessionId, shop.slug, completing]);
+
+  useEffect(() => {
+    if (!completing) return undefined;
+    const timer = setTimeout(() => {
+      setCompleting(false);
+      setError("O banco ainda não confirmou. Confira os dados e tente de novo, ou pague com Pix.");
+    }, 35000);
+    return () => clearTimeout(timer);
+  }, [completing]);
 
   async function submit(event) {
     event.preventDefault();
@@ -387,9 +402,8 @@ export default function Checkout() {
           goPaid();
           return;
         }
-        if (payload.pending) {
-          setCompleting(true);
-          return;
+        if (!payload.pixCopy) {
+          throw new Error(payload.error || "Não foi possível gerar o Pix. Tente de novo.");
         }
         if (payload.pixCopy) setPixCopy(payload.pixCopy);
         if (payload.expiresAt) setPixExpiresAt(Number(payload.expiresAt));
@@ -397,7 +411,15 @@ export default function Checkout() {
       }
       const brick = brickRef.current;
       if (!brick?.getFormData) throw new Error("Aguarde o cartão carregar.");
-      const formData = await brick.getFormData();
+      let formData;
+      try {
+        formData = await brick.getFormData();
+      } catch {
+        throw new Error("Confira os dados do cartão. Número, validade, CVV e CPF precisam estar certos.");
+      }
+      if (!formData?.token) {
+        throw new Error("Confira os dados do cartão. Número, validade, CVV e CPF precisam estar certos.");
+      }
       const extra = (await brick.getAdditionalData?.().catch(() => ({}))) || {};
       const response = await fetch("/api/pay-card", {
         method: "POST",
@@ -424,7 +446,7 @@ export default function Checkout() {
         setCompleting(true);
         return;
       }
-      throw new Error(payload.error || "Não foi possível pagar com cartão.");
+      throw new Error(payload.error || "O pagamento não foi aprovado. Confira os dados ou tente Pix.");
     } catch (failure) {
       setError(failure.message || "Não foi possível concluir o pagamento.");
     } finally {
@@ -442,16 +464,29 @@ export default function Checkout() {
     }
   }
 
+  const busy = pending || confirming || completing;
+
   return (
     <div className="checkout-page">
       <PageHead title={paying ? "Pagamento" : "Seus dados"} />
+      {busy ? (
+        <div className="pay-loading" role="status" aria-live="polite">
+          <span className="pay-spinner" aria-hidden="true" />
+          <h2>
+            {completing
+              ? "Confirmando o pagamento"
+              : confirming && method === "pix"
+                ? "Gerando o Pix"
+                : confirming
+                  ? "Processando o cartão"
+                  : "Preparando o pagamento"}
+          </h2>
+          <p>Aguarde alguns segundos. Não feche esta tela.</p>
+        </div>
+      ) : null}
       {waiting ? (
         <div className="empty">
           <h2>Carregando o pedido</h2>
-        </div>
-      ) : completing ? (
-        <div className="empty paid-box">
-          <h2>Confirmando o pagamento</h2>
         </div>
       ) : lines.length === 0 ? (
         <div className="empty">
