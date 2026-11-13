@@ -252,6 +252,10 @@ export default function Checkout() {
         const { payload } = await fetchCheckoutSession(sessionId);
         if (cancel) return;
         if (payload.paid) goPaid();
+        else if (completing && payload.canceled) {
+          setCompleting(false);
+          setError("O pagamento não foi aprovado. Tente outro cartão ou Pix.");
+        }
       } catch {
         /* o webhook ainda pode confirmar o pedido */
       }
@@ -262,7 +266,7 @@ export default function Checkout() {
       cancel = true;
       clearInterval(timer);
     };
-  }, [paying, sessionId, shop.slug]);
+  }, [paying, sessionId, shop.slug, completing]);
 
   async function submit(event) {
     event.preventDefault();
@@ -383,6 +387,10 @@ export default function Checkout() {
           goPaid();
           return;
         }
+        if (payload.pending) {
+          setCompleting(true);
+          return;
+        }
         if (payload.pixCopy) setPixCopy(payload.pixCopy);
         if (payload.expiresAt) setPixExpiresAt(Number(payload.expiresAt));
         return;
@@ -401,13 +409,22 @@ export default function Checkout() {
           paymentTypeId: extra.paymentTypeId || formData.payment_type_id || "credit_card",
           installments: 1,
           identification: formData.payer?.identification,
+          deviceId: extra.deviceId || extra.device_id || window.MP_DEVICE_SESSION_ID || "",
         }),
       });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok || !payload.paid) {
+      if (!response.ok) {
         throw new Error(payload.error || "Não foi possível pagar com cartão.");
       }
-      goPaid();
+      if (payload.paid) {
+        goPaid();
+        return;
+      }
+      if (payload.pending) {
+        setCompleting(true);
+        return;
+      }
+      throw new Error(payload.error || "Não foi possível pagar com cartão.");
     } catch (failure) {
       setError(failure.message || "Não foi possível concluir o pagamento.");
     } finally {

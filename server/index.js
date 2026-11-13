@@ -15,15 +15,19 @@ import { quoteDelivery } from "./freight.js";
 import {
   cancelMpOrder,
   createMpOrder,
+  firstPayment,
   getMpOrder,
   searchMpOrderByRef,
   moneyAmount,
+  mpItemsFromOrder,
   mpOrderClosed,
   mpOrderPaid,
+  mpOrderPending,
   mpPublicError,
   payerFromOrder,
   paymentKindFromOrder,
   pixFromOrder,
+  waitForMpOrder,
 } from "./mercadopago.js";
 import { isShopPage, sendShopPage } from "./shopPage.js";
 import { publicError, readBody, readJson, securityHeaders, tooMany } from "./security.js";
@@ -623,6 +627,26 @@ function orderAmount(existing) {
   return moneyAmount(existing.total);
 }
 
+function mpPaymentBody(existing, payer, payment) {
+  const amount = orderAmount(existing);
+  const { expiration_time: expirationTime, ...paymentMethod } = payment;
+  const row = { amount, payment_method: paymentMethod };
+  if (expirationTime) row.expiration_time = expirationTime;
+  return {
+    type: "online",
+    processing_mode: "automatic",
+    total_amount: amount,
+    external_reference: existing.id,
+    description: "Pedido",
+    payer,
+    items: mpItemsFromOrder(existing),
+    config: { location: { state_id: mpLocation() } },
+    transactions: {
+      payments: [row],
+    },
+  };
+}
+
 async function createPix(request, response) {
   if (!supabase) {
     json(response, 503, { error: "Pagamento ainda não está configurado no servidor." });
@@ -651,7 +675,8 @@ async function createPix(request, response) {
   try {
     const currentId = mpOrderId(existing.stripe_session_id);
     if (currentId) {
-      const previous = await getMpOrder(token, currentId).catch(() => null);
+      let previous = await getMpOrder(token, currentId).catch(() => null);
+      if (previous) previous = await waitForMpOrder(token, previous, { wantPix: true });
       if (previous) {
         if (mpOrderPaid(previous)) {
           await fulfill(existing.id, previous);
@@ -659,42 +684,29 @@ async function createPix(request, response) {
           return;
         }
         const current = pixFromOrder(previous);
-        if (current.expiresAt > Date.now()) {
+        if (current.pixCopy && current.expiresAt > Date.now()) {
           json(response, 200, current);
+          return;
+        }
+        if (mpOrderPending(previous) && !current.pixCopy) {
+          await rememberMpOrder(existing.id, previous);
+          json(response, 200, { paid: false, pending: true });
           return;
         }
         await cancelMpOrder(token, currentId).catch(() => {});
       }
     }
-    const amount = orderAmount(existing);
     const payer = payerFromOrder(existing, checkoutEmail(existing.id));
     const shopKeys = (await supabase.from("shops").select("mp_public_key, stripe_publishable_key").eq("id", existing.shop_id).maybeSingle()).data;
     const publicKey = shopPublicKey({
       mpPublicKey: asMpKey(shopKeys?.mp_public_key) || asMpKey(shopKeys?.stripe_publishable_key),
     });
     if (isMpTestMode(publicKey, token)) payer.first_name = "APRO";
-    let created = await createMpOrder(token, {
-      type: "online",
-      processing_mode: "automatic",
-      total_amount: amount,
-      external_reference: existing.id,
-      description: "Pedido",
-      payer,
-      config: { location: { state_id: mpLocation() } },
-      transactions: {
-        payments: [
-          {
-            amount,
-            payment_method: { id: "pix", type: "bank_transfer" },
-            expiration_time: "PT30M",
-          },
-        ],
-      },
-    });
-    if (created?.id && !mpOrderPaid(created) && !pixFromOrder(created).pixCopy) {
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      created = (await getMpOrder(token, created.id).catch(() => null)) || created;
-    }
+    let created = await createMpOrder(
+      token,
+      mpPaymentBody(existing, payer, { id: "pix", type: "bank_transfer", expiration_time: "PT30M" }),
+    );
+    created = await waitForMpOrder(token, created, { wantPix: true });
     await rememberMpOrder(existing.id, created);
     if (mpOrderPaid(created)) {
       await fulfill(existing.id, created);
@@ -703,6 +715,10 @@ async function createPix(request, response) {
     }
     const pix = pixFromOrder(created);
     if (!pix.pixCopy) {
+      if (mpOrderPending(created)) {
+        json(response, 200, { paid: false, pending: true });
+        return;
+      }
       json(response, 500, { error: "Não foi possível gerar o Pix." });
       return;
     }
@@ -749,17 +765,22 @@ async function payCard(request, response) {
   try {
     const currentId = mpOrderId(existing.stripe_session_id);
     if (currentId) {
-      const previous = await getMpOrder(accessToken, currentId).catch(() => null);
+      let previous = await getMpOrder(accessToken, currentId).catch(() => null);
+      if (previous) previous = await waitForMpOrder(accessToken, previous);
       if (previous && mpOrderPaid(previous)) {
         await fulfill(existing.id, previous);
         json(response, 200, { paid: true });
+        return;
+      }
+      if (previous && mpOrderPending(previous)) {
+        await rememberMpOrder(existing.id, previous);
+        json(response, 200, { paid: false, pending: true });
         return;
       }
       if (previous && !mpOrderPaid(previous)) {
         await cancelMpOrder(accessToken, currentId).catch(() => {});
       }
     }
-    const amount = orderAmount(existing);
     const identification = payload.identification && payload.identification.number
       ? {
           type: String(payload.identification.type || "CPF").toUpperCase(),
@@ -768,36 +789,32 @@ async function payCard(request, response) {
       : null;
     const payer = payerFromOrder(existing, checkoutEmail(existing.id));
     if (identification) payer.identification = identification;
-    const created = await createMpOrder(accessToken, {
-      type: "online",
-      processing_mode: "automatic",
-      total_amount: amount,
-      external_reference: existing.id,
-      description: "Pedido",
-      payer,
-      config: { location: { state_id: mpLocation() } },
-      transactions: {
-        payments: [
-          {
-            amount,
-            payment_method: {
-              id: paymentMethodId,
-              type: paymentType === "debit_card" ? "debit_card" : "credit_card",
-              token,
-              installments,
-            },
-          },
-        ],
-      },
-    });
+    let created = await createMpOrder(
+      accessToken,
+      mpPaymentBody(existing, payer, {
+        id: paymentMethodId,
+        type: paymentType === "debit_card" ? "debit_card" : "credit_card",
+        token,
+        installments,
+        statement_descriptor: "PEDIAQUI",
+      }),
+      { deviceId: String(payload.deviceId || "").trim() },
+    );
+    created = await waitForMpOrder(accessToken, created);
     await rememberMpOrder(existing.id, created);
     if (mpOrderPaid(created)) {
       await fulfill(existing.id, created);
       json(response, 200, { paid: true });
       return;
     }
+    if (mpOrderPending(created)) {
+      json(response, 200, { paid: false, pending: true });
+      return;
+    }
+    const detail = firstPayment(created)?.status_detail || created?.status_detail || created?.status || "";
+    console.error("Cartão MP:", created?.status, detail);
     json(response, 400, {
-      error: "O pagamento não foi aprovado. Tente outro cartão ou Pix.",
+      error: mpPublicError(detail, "O pagamento não foi aprovado. Tente outro cartão ou Pix."),
     });
   } catch (error) {
     console.error("Cartão:", error.message);

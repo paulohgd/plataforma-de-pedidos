@@ -22,10 +22,17 @@ function waitingStatus(value) {
     "action_required",
     "pending",
     "created",
+    "processing",
+    "in_process",
+    "authorized",
     "waiting_transfer",
     "waiting_payment",
+    "waiting_capture",
     "pending_waiting_transfer",
     "pending_waiting_payment",
+    "pending_contingency",
+    "pending_review_manual",
+    "pending_challenge",
   ].includes(status);
 }
 
@@ -51,6 +58,51 @@ export function mpOrderClosed(order) {
     closedStatus(payment?.status) ||
     closedStatus(payment?.status_detail)
   );
+}
+
+export function mpOrderPending(order) {
+  if (!order || mpOrderPaid(order) || mpOrderClosed(order)) return false;
+  const payment = firstPayment(order);
+  const statuses = [order.status, order.status_detail, payment?.status, payment?.status_detail];
+  return statuses.some(waitingStatus) || Boolean(order.id);
+}
+
+export function unwrapMpOrder(payload) {
+  if (!payload || typeof payload !== "object") return payload;
+  const inner = payload.data && typeof payload.data === "object" ? payload.data : payload;
+  return inner?.id ? inner : payload;
+}
+
+export function mpItemsFromOrder(order) {
+  const amount = moneyAmount(order?.total);
+  const lines = (order?.items || []).filter((line) => Number(line.total) > 0 && String(line.name || "").trim());
+  if (!lines.length) return [{ title: "Pedido", quantity: 1, unit_price: amount }];
+  const items = lines.map((line) => {
+    const quantity = Math.max(1, Number(line.qty) || 1);
+    return {
+      title: String(line.name).slice(0, 150),
+      quantity,
+      unit_price: moneyAmount(Number(line.total) / quantity),
+    };
+  });
+  const sum = items.reduce((acc, item) => acc + Number(item.unit_price) * item.quantity, 0);
+  const diff = Number((Number(order.total) - sum).toFixed(2));
+  if (diff > 0.009) items.push({ title: "Entrega", quantity: 1, unit_price: moneyAmount(diff) });
+  if (diff < -0.009) return [{ title: "Pedido", quantity: 1, unit_price: amount }];
+  return items;
+}
+
+export async function waitForMpOrder(accessToken, order, { wantPix = false } = {}) {
+  let current = unwrapMpOrder(order);
+  if (!current?.id) return current;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (mpOrderPaid(current) || mpOrderClosed(current)) return current;
+    if (wantPix && pixFromOrder(current).pixCopy) return current;
+    if (attempt === 9) return current;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    current = unwrapMpOrder((await getMpOrder(accessToken, current.id).catch(() => current)) || current);
+  }
+  return current;
 }
 
 export function paymentKindFromOrder(order) {
@@ -103,13 +155,14 @@ export function mpPublicError(error, fallback = "Não foi possível concluir o p
   return fallback;
 }
 
-export async function mpFetch(accessToken, { method = "GET", path, body, idempotencyKey } = {}) {
+export async function mpFetch(accessToken, { method = "GET", path, body, idempotencyKey, deviceId } = {}) {
   const headers = {
     Authorization: `Bearer ${accessToken}`,
     Accept: "application/json",
   };
   if (body) headers["Content-Type"] = "application/json";
   if (idempotencyKey) headers["X-Idempotency-Key"] = idempotencyKey;
+  if (deviceId) headers["X-meli-session-id"] = String(deviceId);
   const response = await fetch(`${API}${path}`, {
     method,
     headers,
@@ -125,17 +178,20 @@ export async function mpFetch(accessToken, { method = "GET", path, body, idempot
   return payload;
 }
 
-export async function createMpOrder(accessToken, body, idempotencyKey = randomUUID()) {
-  return mpFetch(accessToken, {
-    method: "POST",
-    path: "/v1/orders",
-    body,
-    idempotencyKey,
-  });
+export async function createMpOrder(accessToken, body, { idempotencyKey = randomUUID(), deviceId } = {}) {
+  return unwrapMpOrder(
+    await mpFetch(accessToken, {
+      method: "POST",
+      path: "/v1/orders",
+      body,
+      idempotencyKey,
+      deviceId,
+    }),
+  );
 }
 
 export async function getMpOrder(accessToken, id) {
-  return mpFetch(accessToken, { path: `/v1/orders/${encodeURIComponent(id)}` });
+  return unwrapMpOrder(await mpFetch(accessToken, { path: `/v1/orders/${encodeURIComponent(id)}` }));
 }
 
 export async function searchMpOrderByRef(accessToken, externalReference) {
