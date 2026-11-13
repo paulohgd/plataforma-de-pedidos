@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { loadMercadoPago } from "@mercadopago/sdk-js";
 import { useCatalog } from "../catalog";
 import { cepDigits, composeAddress, formatCep, lookupCep } from "../cep";
-import { formatPhone, money, phoneDigits, validEmail, validPhone } from "../format";
+import { formatPhone, money, phoneDigits, validPhone } from "../format";
 import { cleanCouponCode, couponDiscount, findCoupon } from "../coupons";
 import { cleanMinOrder, deliveryFeeLabel, deliveryRulesHint } from "../freight";
 import { useCart } from "../cart";
@@ -321,10 +321,6 @@ export default function Checkout() {
       setError("Informe seu nome.");
       return;
     }
-    if (!validEmail(customer.email)) {
-      setError("Informe um e-mail válido.");
-      return;
-    }
     if (!validPhone(whatsapp)) {
       setError("Informe um WhatsApp válido, com DDD.");
       return;
@@ -362,7 +358,6 @@ export default function Checkout() {
           slug: shop.slug,
           customer: {
             name,
-            email: String(customer.email || "").trim(),
             whatsapp,
             mode: customer.mode,
             cep: deliveryCep,
@@ -467,7 +462,7 @@ export default function Checkout() {
           installments: 1,
           identification: formData.payer?.identification,
           issuerId: formData.issuer_id || extra.issuerId || "",
-          email: formData.payer?.email || customer.email,
+          email: formData.payer?.email || payerEmail,
           deviceId: extra.deviceId || extra.device_id || deviceId,
           place,
         }),
@@ -605,18 +600,6 @@ export default function Checkout() {
               onChange={(event) => setCustomer({ name: event.target.value })}
             />
           </label>
-          <label>
-            E-mail
-            <input
-              type="email"
-              value={customer.email || ""}
-              autoComplete="email"
-              maxLength={120}
-              placeholder="voce@email.com"
-              onChange={(event) => setCustomer({ email: event.target.value })}
-            />
-          </label>
-          <p className="hint">O Mercado Pago usa este e-mail na análise do pagamento. Use um e-mail verdadeiro.</p>
           <label>
             WhatsApp
             <input

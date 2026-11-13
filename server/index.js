@@ -4,7 +4,7 @@ import WebSocket from "ws";
 import { createClient } from "@supabase/supabase-js";
 import { paidMessage, paidTitle } from "../src/config.js";
 import { cleanCouponCode, couponDiscount, findCoupon } from "../src/coupons.js";
-import { checkoutEmail, fullPhone, payerEmail, validEmail, validPhone } from "../src/format.js";
+import { checkoutEmail, fullPhone, payerEmail, validPhone } from "../src/format.js";
 import { formatKm } from "../src/freight.js";
 import { asMpKey, isMpCredential, isMpTestKey } from "../src/mp.js";
 import { buildOrderText, whatsappOrderUrl } from "../src/order.js";
@@ -423,10 +423,6 @@ async function createCheckout(request, response) {
     json(response, 400, { error: "Informe seu nome." });
     return;
   }
-  if (!email || !validEmail(email)) {
-    json(response, 400, { error: "Informe um e-mail válido." });
-    return;
-  }
   if (!validPhone(whatsapp)) {
     json(response, 400, { error: "Informe um WhatsApp válido, com DDD." });
     return;
@@ -565,7 +561,7 @@ async function createCheckout(request, response) {
   json(response, 200, {
     sessionId: order.id,
     publicKey,
-    payerEmail: email,
+    payerEmail: email || checkoutEmail(order.id),
   });
 }
 
@@ -674,7 +670,7 @@ function orderPayerEmail(order, payload = {}) {
 function mpPaymentBody(existing, payer, payment, place) {
   const amount = orderAmount(existing);
   const { expiration_time: expirationTime, issuer_id: issuerId, ...paymentMethod } = payment;
-  if (issuerId) paymentMethod.issuer_id = String(issuerId);
+  if (/^\d+$/.test(String(issuerId || ""))) paymentMethod.issuer_id = String(issuerId);
   const row = { amount, payment_method: paymentMethod };
   if (expirationTime) row.expiration_time = expirationTime;
   const pickup = existing.customer_mode !== "entrega";
@@ -688,11 +684,6 @@ function mpPaymentBody(existing, payer, payment, place) {
     payer,
     items: mpItemsFromOrder(existing),
     config: { location: { state_id: mpLocation(place?.uf) } },
-    additional_info: {
-      "payer.authentication_type": "WEB",
-      "shipment.local_pickup": pickup,
-      "shipment.express": false,
-    },
     transactions: {
       payments: [row],
     },
@@ -874,7 +865,9 @@ async function payCard(request, response) {
     const failed = unwrapMpOrder(error.payload);
     const detail = firstPayment(failed)?.status_detail || failed?.status_detail || error.message;
     console.error("Cartão:", error.message, detail);
-    json(response, 400, { error: mpPublicError(detail, "Não foi possível pagar com cartão. Confira os dados.") });
+    json(response, 400, {
+      error: mpPublicError(detail, "Não foi possível processar o cartão agora. Tente de novo ou pague com Pix."),
+    });
   }
 }
 
