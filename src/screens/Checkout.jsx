@@ -28,9 +28,11 @@ function stripePromiseFor(key) {
   return stripeCache.get(publishable);
 }
 
-function CardPayForm({ confirming, onError, onPaid, onPending, payerEmail = "" }) {
+function CardPayForm({ confirming, onError, onPaid, onPending, payerEmail = "", payerName = "" }) {
   const stripe = useStripe();
   const elements = useElements();
+  const billingName = String(payerName || "Cliente").trim().slice(0, 120) || "Cliente";
+  const billingEmail = String(payerEmail || "").trim();
 
   async function pay() {
     if (!stripe || !elements) throw new Error("Aguarde o cartão carregar.");
@@ -39,11 +41,12 @@ function CardPayForm({ confirming, onError, onPaid, onPending, payerEmail = "" }
       redirect: "if_required",
       confirmParams: {
         return_url: `${window.location.origin}${window.location.pathname}`,
-        payment_method_data: payerEmail
-          ? {
-              billing_details: { email: payerEmail },
-            }
-          : undefined,
+        payment_method_data: {
+          billing_details: {
+            name: billingName,
+            email: billingEmail || undefined,
+          },
+        },
       },
     });
     if (result.error) throw new Error(result.error.message || "Não foi possível pagar com cartão.");
@@ -59,7 +62,7 @@ function CardPayForm({ confirming, onError, onPaid, onPending, payerEmail = "" }
       <PaymentElement
         options={{
           layout: "tabs",
-          wallets: { applePay: "never", googlePay: "never" },
+          wallets: { applePay: "auto", googlePay: "auto" },
           fields: { billingDetails: { email: "never", name: "never", phone: "never", address: "never" } },
         }}
         onLoadError={() => onError("Não foi possível abrir o cartão.")}
@@ -508,6 +511,7 @@ export default function Checkout() {
                   <CardPayForm
                     confirming={confirming}
                     payerEmail={payerEmail}
+                    payerName={customer.name}
                     onError={setError}
                     onPaid={() => goPaid()}
                     onPending={async () => {

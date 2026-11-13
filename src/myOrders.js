@@ -13,7 +13,7 @@ function notifyOrders() {
 export function readMyOrders(slug) {
   try {
     const rows = JSON.parse(localStorage.getItem(storageKey(slug)) || "[]");
-    return Array.isArray(rows) ? rows.filter((row) => row && row.id) : [];
+    return sortMyOrders(Array.isArray(rows) ? rows.filter((row) => row && row.id) : []);
   } catch {
     return [];
   }
@@ -24,6 +24,17 @@ function saveMyOrders(slug, rows) {
   notifyOrders();
 }
 
+function orderTime(row) {
+  const created = Date.parse(String(row?.createdAt || "")) || 0;
+  return created || Number(row?.expiresAt || 0) || 0;
+}
+
+export function sortMyOrders(rows = []) {
+  return rows
+    .slice()
+    .sort((a, b) => orderTime(b) - orderTime(a) || String(b.id || "").localeCompare(String(a.id || "")));
+}
+
 export function upsertMyOrder(slug, patch = {}) {
   const id = String(patch.id || "").trim();
   if (!slug || !id) return readMyOrders(slug);
@@ -31,14 +42,18 @@ export function upsertMyOrder(slug, patch = {}) {
   const index = rows.findIndex((row) => row.id === id);
   const current = index >= 0 ? rows[index] : {};
   const next = { ...current, ...patch, id };
+  if (!next.createdAt) next.createdAt = current.createdAt || new Date().toISOString();
   if (next.status === "paid") {
     next.paid = true;
     next.expiresAt = 0;
   }
-  if (index >= 0) rows.splice(index, 1);
-  rows.unshift(next);
-  saveMyOrders(slug, rows);
-  return rows;
+  if (index >= 0) {
+    rows[index] = next;
+  } else {
+    rows.unshift(next);
+  }
+  saveMyOrders(slug, sortMyOrders(rows));
+  return readMyOrders(slug);
 }
 
 export function myOrderStatus(row, now = Date.now()) {

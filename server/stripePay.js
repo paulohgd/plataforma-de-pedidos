@@ -59,7 +59,11 @@ export function pixFromIntent(intent) {
   if (stripePaymentPaid(intent)) return { paid: true, pixCopy: "", expiresAt: 0 };
   const qr = intent?.next_action?.pix_display_qr_code || {};
   const copy = String(qr.data || "").trim();
-  const expiresAt = Number(qr.expires_at || 0) * 1000 || (intent?.created ? intent.created * 1000 + PIX_MS : 0);
+  const createdMs = intent?.created ? intent.created * 1000 : Date.now();
+  const softExpiresAt = createdMs + PIX_MS;
+  const stripeExpiresAt = Number(qr.expires_at || 0) * 1000;
+  // Soft UI window is 5 minutes; Stripe may keep the Pix code alive longer.
+  const expiresAt = stripeExpiresAt ? Math.min(softExpiresAt, stripeExpiresAt) : softExpiresAt;
   return { paid: false, pixCopy: copy, expiresAt };
 }
 
